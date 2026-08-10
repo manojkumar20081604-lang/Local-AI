@@ -1,5 +1,4 @@
 import {
-  
   Bot,
   ChevronDown,
   ChevronRight,
@@ -39,6 +38,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(true);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +51,7 @@ export default function App() {
   }, [messages, loading]);
 
   async function loadModels() {
+    setModelsLoading(true);
     try {
       const availableModels = await getModels();
 
@@ -65,6 +66,8 @@ export default function App() {
     } catch (err) {
       console.error("Failed to load LM Studio models:", err);
       setError("LM Studio is not available.");
+    } finally {
+      setModelsLoading(false);
     }
   }
 
@@ -157,10 +160,15 @@ export default function App() {
             className="model"
             value={selectedModel}
             onChange={(event) => setSelectedModel(event.target.value)}
+            disabled={modelsLoading}
           >
             {models.length === 0 ? (
               <option value={selectedModel}>
                 {selectedModel}
+              </option>
+            ) : modelsLoading ? (
+              <option value="" disabled>
+                Loading...
               </option>
             ) : (
               models.map((model) => (
