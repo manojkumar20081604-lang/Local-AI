@@ -29,7 +29,6 @@ import type { AIModel } from "./services/ai";
 import {
   detectProjectIntent,
   getIntentInstructions,
-  selectRelevantProjectFiles,
 } from "./services/projectIntelligence";
 
 import {
@@ -55,13 +54,13 @@ interface ChatMessage {
 }
 
 interface PendingEdit {
-  type: "create" | "edit" | "delete";
+  type: "create" | "edit" | "delete" | "exec";
   filePath: string;
   content?: string;
   search?: string;
   replace?: string;
+  command?: string;
 }
-
 
 
 
@@ -324,15 +323,6 @@ async function buildProjectContext(
   const intent = detectProjectIntent(text);
   const lowerText = text.toLowerCase();
 
-  const relevantFiles = selectRelevantProjectFiles(
-    text,
-    projectFiles,
-    6,
-  );
-
-
-  const filesToRead = relevantFiles.map((item) => item.file);
-
   const mentionedFiles = projectFiles.filter((file) => {
     if (file.is_directory) {
       return false;
@@ -347,44 +337,32 @@ async function buildProjectContext(
     );
   });
 
-  /*
-   * For now, keep the existing safe behavior:
-   * only read explicitly mentioned files.
-   *
-   * Intent detection is now available to the
-   * intelligence layer without dramatically
-   * increasing context size.
-   */
-  const filesToUse =
-    mentionedFiles.length > 0
-      ? mentionedFiles
-      : filesToRead;
+  const filesToUse = mentionedFiles.length > 0
+    ? mentionedFiles
+    : projectFiles.filter((file) => !file.is_directory).slice(0, 6);
 
   const fileContexts: string[] = [];
-  const MAX_FILE_CHARS = 40000; 
+  const MAX_FILE_CHARS = 8000;
 
-  for (const file of filesToUse.slice(0, 6)) {
-
+  for (const file of filesToUse) {
     try {
-          
-          const content = await readProjectFile(
-  selectedProject,
-  file.path,
-);
+      const content = await readProjectFile(
+        selectedProject,
+        file.path,
+      );
 
-const limitedContent = content.slice(0, MAX_FILE_CHARS);      
+      const limitedContent = content.slice(0, MAX_FILE_CHARS);
 
       fileContexts.push(
-          `FILE: ${file.path}\n\n${limitedContent}`,
+        `FILE: ${file.path}\n\n${limitedContent}`,
       );
-    
-     console.log(
-  "[Project Intelligence] Read file:",
-  file.path,
-  "chars:",
-  content.length,
-);
-  
+
+      console.log(
+        "[Project Intelligence] Read file:",
+        file.path,
+        "chars:",
+        content.length,
+      );
     } catch (err) {
       console.error(
         `Failed to read ${file.path}:`,
@@ -417,7 +395,6 @@ ${fileContexts.join(
 )}
 `;
 }
-
 
 function parseEditResponses(response: string): PendingEdit[] {
   const proposals: PendingEdit[] = [];
@@ -465,6 +442,16 @@ function parseEditResponses(response: string): PendingEdit[] {
     });
   }
 
+   const execRegex =
+    /<EXEC>\s*COMMAND:\s*(.+?)\s*<\/EXEC>/gis;
+
+  for (const match of response.matchAll(execRegex)) {
+    proposals.push({
+      type: "exec",
+      filePath: "",
+      command: match[1].trim(),
+    });
+  }
 
   return proposals;
 }
@@ -487,7 +474,12 @@ async function applyPendingEdits() {
     const backups: EditBackup[] = [];
 
     // Capture the original state of every proposed file.
-    for (const pendingEdit of pendingEdits) {
+
+for (const pendingEdit of pendingEdits) {
+      if (pendingEdit.type === "exec") {
+        continue;
+      }
+
       if (pendingEdit.type === "create") {
         backups.push({
           filePath: pendingEdit.filePath,
@@ -512,7 +504,45 @@ async function applyPendingEdits() {
 
     try {
       for (const pendingEdit of pendingEdits) {
-        // DELETE
+
+if (pendingEdit.type === "exec") {
+  if (!pendingEdit.command?.trim()) {
+    throw new Error("EXEC operation has no command.");
+  }
+
+  const command = pendingEdit.command.trim();
+
+  const result = await runProjectCommand(
+    selectedProject,
+    command,
+  );
+
+  const output = [
+    result.stdout.trimEnd(),
+    result.stderr.trimEnd(),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  setTerminalHistory((previous) => [
+    ...previous,
+    {
+      command,
+      output: output || "(no output)",
+      success: result.success,
+    },
+  ]);
+
+  if (!result.success) {
+    throw new Error(
+      `Command failed: ${command}\n${output}`,
+    );
+  }
+
+  continue;
+}
+        
+// DELETE
         if (pendingEdit.type === "delete") {
           console.log(
             "[DELETE DEBUG] Applying delete:",
@@ -846,11 +876,31 @@ async function undoLastEdit() {
 
 
 function renderEditPreview(edit: PendingEdit) {
+  if (edit.type === "exec") {
+    return (
+      <pre className="edit-diff">
+        <span className="diff-added">
+          {edit.command ?? ""}
+        </span>
+      </pre>
+    );
+  }
+
   if (edit.type === "create") {
     return (
       <pre className="edit-diff">
         <span className="diff-added">
           {edit.content ?? ""}
+        </span>
+      </pre>
+    );
+  }
+
+  if (edit.type === "delete") {
+    return (
+      <pre className="edit-diff">
+        <span className="diff-removed">
+          DELETE FILE: {edit.filePath}
         </span>
       </pre>
     );
@@ -869,7 +919,6 @@ function renderEditPreview(edit: PendingEdit) {
   );
 }
 
-
 async function applySinglePendingEdit(index: number) {
   if (!selectedProject) {
     return;
@@ -880,6 +929,48 @@ async function applySinglePendingEdit(index: number) {
   if (!pendingEdit) {
     return;
   }
+
+
+  if (pendingEdit.type === "exec") {
+  if (!pendingEdit.command?.trim()) {
+    throw new Error("EXEC operation has no command.");
+  }
+
+  const command = pendingEdit.command.trim();
+
+  const result = await runProjectCommand(
+    selectedProject,
+    command,
+  );
+
+  const output = [
+    result.stdout.trimEnd(),
+    result.stderr.trimEnd(),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  setTerminalHistory((previous) => [
+    ...previous,
+    {
+      command,
+      output: output || "(no output)",
+      success: result.success,
+    },
+  ]);
+
+  if (!result.success) {
+    throw new Error(
+      `Command failed: ${command}\n${output}`,
+    );
+  }
+
+  setPendingEdits((previous) =>
+    previous.filter((_, editIndex) => editIndex !== index),
+  );
+
+  return;
+}
 
   try {
     setError("");
@@ -1112,6 +1203,11 @@ async function runTerminalCommand() {
 async function sendMessage() {
   const text = input.trim();
 
+  const projectNameRequest =
+    /\bwhat\s+is\s+(the\s+)?project\s+name\b/i.test(text) ||
+    /\bwhat'?s\s+(the\s+)?project\s+name\b/i.test(text) ||
+    /\bname\s+of\s+(the\s+)?project\b/i.test(text);
+
   if (!text || loading || !selectedProject) {
     return;
   }
@@ -1140,16 +1236,94 @@ setMessages(fullMessages);
 setInput("");
 setLoading(true);
 
-  try {
-    const projectContext =
-      await buildProjectContext(text);
-     
-          console.log(
-  "[Project Intelligence] Final context:",
-  projectContext.length,
-  "chars",
-);
-          
+
+
+if (projectNameRequest) {
+  const projectNameResponse =
+    `The current project is **${selectedProject.name}**.`;
+
+  const updatedMessages: ChatMessage[] = [
+    ...fullMessages,
+    {
+      role: "assistant",
+      content: projectNameResponse,
+    },
+  ];
+
+  setMessages(updatedMessages);
+  setLoading(false);
+  return;
+}
+
+const inventoryRequest =
+  /\binventory\b.*\b(files?|directories|folders|project|codebase)\b/i.test(text) ||
+  /\binspect\b.*\b(files?|directories|folders|project structure|codebase)\b/i.test(text) ||
+  /\b(list|show)\b.*\b(files?|directories|folders)\b/i.test(text) ||
+  /\bwhat\b.*\b(files?|directories|folders)\b.*\b(project|codebase)\b/i.test(text);
+
+
+try {
+  let projectContext = "";
+
+  if (inventoryRequest) {
+    const files = await listProjectFiles(selectedProject);
+
+    const realFileList = files
+      .map((file) =>
+        file.is_directory
+          ? `[DIR] ${file.path}`
+          : `[FILE] ${file.path}`,
+      )
+      .join("\n");
+
+    projectContext =
+      `AUTHORITATIVE REAL PROJECT FILE LIST:\n\n${realFileList}\n\n` +
+      `IMPORTANT: This list came directly from the attached project. ` +
+      `For inventory questions, ONLY mention files present in this list. ` +
+      `Do not invent, infer, or reuse files from previous conversations.`;
+
+    const inventoryResponse =
+      `PROJECT INVENTORY\n\n${realFileList}\n\n` +
+      `Total items: ${files.length}`;
+
+    const updatedMessages: ChatMessage[] = [
+      ...fullMessages,
+      {
+        role: "assistant",
+        content: inventoryResponse,
+      },
+    ];
+
+    setMessages(updatedMessages);
+
+    const updatedProject: StoredProject = {
+      ...selectedProject,
+      messages: updatedMessages,
+      updated_at: new Date().toISOString(),
+    };
+
+    await saveProject(updatedProject);
+
+    setSelectedProject(updatedProject);
+
+    setProjects((previous) =>
+      previous.map((project) =>
+        project.id === updatedProject.id
+          ? updatedProject
+          : project,
+      ),
+    );
+
+    return;
+  } else {
+    projectContext = await buildProjectContext(text);
+  }
+
+  console.log(
+    "[Project Intelligence] Final context:",
+    projectContext.length,
+    "chars",
+  );          
 
     const aiMessages = [
       {
@@ -1184,6 +1358,28 @@ IMPORTANT:
 - Never give Markdown tables instead of operations.
 - Never write a proposal document instead of an operation.
 - Never tell the user to manually copy or edit files.
+
+
+EXECUTE A PROJECT COMMAND:
+
+When the user explicitly asks you to run a project command, build,
+test, install dependencies, inspect command output, or perform an
+operation that requires a terminal command, return exactly:
+
+<EXEC>
+COMMAND: command here
+</EXEC>
+
+Rules:
+- Never execute the command yourself.
+- Never claim the command was executed.
+- The application will show the command to the user for approval.
+- The command must only execute after the user approves it.
+- Use the project directory as the working directory.
+- Do not wrap the command in Markdown code fences.
+- Do not output terminal commands outside the EXEC block when an
+  executable operation is requested.
+
 
 DELETE A FILE:
 
@@ -1705,12 +1901,12 @@ const updatedMessages: ChatMessage[] = [
     <div className="edit-proposal-header">
       <div>
         <strong>
-          {`AI proposed ${pendingEdits.length} file${
-            pendingEdits.length !== 1 ? "s" : ""
-          }`}
+          {`AI proposed ${pendingEdits.length} operation${
+  pendingEdits.length !== 1 ? "s" : ""
+}`}
         </strong>
 
-        <span>Review and approve each change</span>
+        <span>Review and approve each operation</span>
       </div>
 
       <div className="edit-proposal-actions">
@@ -1738,8 +1934,11 @@ const updatedMessages: ChatMessage[] = [
           className="edit-item"
         >
           <div className="edit-file-path">
-            <span>{edit.filePath}</span>
-
+          <span>
+  {edit.type === "exec"
+    ? `⚡ EXEC: ${edit.command ?? ""}`
+    : edit.filePath}
+</span>
             <div className="edit-item-actions">
               <button
                 type="button"

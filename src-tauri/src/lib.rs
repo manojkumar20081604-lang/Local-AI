@@ -243,6 +243,7 @@ pub fn run() {
     delete_project,
     get_project,
     list_project_files,
+    read_project_files,
     read_project_file,
     write_project_file,
     delete_project_file,
