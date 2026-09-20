@@ -1,0 +1,39 @@
+# Finetune dependencies — pick backend that matches your OS/GPU
+# Common
+datasets>=2.19
+transformers>=4.42
+accelerate>=0.31
+peft>=0.11
+trl>=0.9
+bitsandbytes>=0.43
+torch>=2.3
+
+# --- Backend: Unsloth (NVIDIA, Linux/Windows, BEST for RTX 5050 8GB) ---
+# 2-5x faster, 5-6GB for 7B QLoRA. Requires CUDA 12.1+
+# pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+
+# --- Backend: MLX (Apple Silicon macOS) ---
+# mlx>=0.18
+# mlx-lm>=0.18
+
+# --- Backend: Axolotl (multi-GPU, YAML, Linux) ---
+# pip install axolotl
+
+# --- Backend: torchtune (PyTorch native, CUDA+MPS) ---
+# pip install torchtune
+
+# GGUF / quantization
+# pip install llama-cpp-python  # optional for GGUF verify
+
+# --- Verification (P3 Anti-Hallucination) — all local, CPU-only, no cloud ---
+# Primary lexical grounder (deterministic, ~165ms/claim, 0.76 F1) + optional semantic
+groundrails>=0.2          # stellarshenson/groundrails — pip install groundrails
+# Code-aware span detector (150M encoder, 4K ctx, 0.642 F1 / qwen-2b 0.689)
+lettucedetect             # KRLabsOrg/LettuceDetect — pip install lettucedetect
+# Optional fast guardrails & human review
+ragground                 # raground — pip install ragground (<0.3ms ONNX)
+groundlens                # groundlens-dev/groundlens — pip install "groundlens[encoder]"
+# Embeddings for groundrails semantic escalation (optional)
+# sentence-transformers>=3.0  # for bge-small-en-v1.5 rerank (only if --semantic)
+# CI gate alternative (deterministic CLI)
+# nogrounds  # jay-tank/nogrounds — pip install nogrounds

@@ -1,0 +1,39 @@
+[package]
+name = "local-ai"
+version = "0.1.0"
+edition = "2021"
+description = "Local AI CLI - cross-platform developer workspace for local models + finetuning"
+authors = ["Local AI"]
+license = "MIT"
+repository = "https://github.com/local-ai/local-ai"
+
+[[bin]]
+name = "local-ai"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive", "cargo", "env"] }
+tokio = { version = "1.40", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5.0"
+anyhow = "1.0"
+toml = "0.8"
+async-trait = "0.1"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.10", features = ["v4"] }
+indicatif = "0.17"
+console = "0.15"
+dialoguer = "0.11"
+bytes = "1.6"
+tokio-stream = "0.1"
+fastembed = "5.13"
+blake3 = "1.5"
+rayon = "1.10"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

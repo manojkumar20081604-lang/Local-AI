@@ -1,0 +1,36 @@
+# Rust
+cli/target/
+src-tauri/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+finetune/.venv/
+outputs/
+*.egg-info/
+finetune-dataset.jsonl
+dataset.jsonl
+
+# Node
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models & large files
+*.gguf
+*.safetensors
+*.bin
+merged/
+gguf/
+lora-adapter/
+
+# Logs
+*.log
