@@ -30,11 +30,28 @@ interface StreamChunk {
   }>;
 }
 
-const BASE_URL = "http://localhost:1234/v1";
+function getBaseUrl(): string {
+  // Allow override via localStorage or Vite env, fallback to LM Studio default.
+  // This keeps Windows/proxy users able to point to 11434 (Ollama) or 1235 without rebuilding.
+  try {
+    const stored = typeof localStorage !== "undefined" ? localStorage.getItem("local-ai-base-url") : null;
+    if (stored && stored.trim()) return stored.trim().replace(/\/$/, "");
+  } catch {}
+  const envUrl = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LLM_BASE_URL;
+  if (envUrl && envUrl.trim()) return envUrl.trim().replace(/\/$/, "");
+  return "http://localhost:1234/v1";
+}
+
+const BASE_URL = "http://localhost:1234/v1"; // legacy constant, prefer getBaseUrl()
 
 export async function getModels(): Promise<AIModel[]> {
   try {
-    const response = await fetch(`${BASE_URL}/models`);
+    const base = getBaseUrl();
+    const response = await fetch(`${base}/models`, {
+      signal: typeof AbortSignal !== "undefined" && (AbortSignal as unknown as { timeout?: (ms: number) => AbortSignal }).timeout
+        ? (AbortSignal as unknown as { timeout: (ms: number) => AbortSignal }).timeout!(5000)
+        : undefined,
+    });
 
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`);
@@ -59,12 +76,15 @@ export async function chat(
   signal?: AbortSignal,
 ): Promise<string> {
   try {
-    const response = await fetch(`${BASE_URL}/chat/completions`, {
+    const base = getBaseUrl();
+    const response = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      signal,
+      signal: signal ?? (typeof AbortSignal !== "undefined" && (AbortSignal as unknown as { timeout?: (ms: number) => AbortSignal }).timeout
+        ? (AbortSignal as unknown as { timeout: (ms: number) => AbortSignal }).timeout!(30000)
+        : undefined),
       body: JSON.stringify({
   model,
   messages,
@@ -138,7 +158,8 @@ export async function streamChatWithModel(
   signal?: AbortSignal,
 ): Promise<void> {
   try {
-    const response = await fetch(`${BASE_URL}/chat/completions`, {
+    const base = getBaseUrl();
+    const response = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -186,6 +207,8 @@ export async function streamChatWithModel(
 
       buffer += decoder.decode(value, { stream: true });
 
+      // Normalize Windows \r\n to \n before splitting (handles LM Studio on Windows)
+      buffer = buffer.replace(/\r\n/g, "\n");
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 

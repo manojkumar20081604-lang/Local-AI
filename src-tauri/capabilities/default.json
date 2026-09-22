@@ -7,7 +7,16 @@
   ],
   "permissions": [
     "core:default",
-    "fs:default",
-    "dialog:default"
+    "dialog:default",
+    "fs:allow-exists",
+    "fs:allow-read",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "$APPDATA/com.localai.app/**" },
+        { "path": "$RESOURCE/**" }
+      ]
+    }
   ]
 }

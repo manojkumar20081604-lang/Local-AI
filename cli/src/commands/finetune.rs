@@ -121,6 +121,27 @@ fn detect_backend(force: Option<String>) -> String {
     "torchtune".to_string()
 }
 
+fn python_bin() -> String {
+    // Cross-platform python detection: Windows uses `python`/`py`, Unix uses `python3`/`python`
+    let candidates: &[&str] = if cfg!(target_os = "windows") {
+        &["python", "py", "python3"]
+    } else {
+        &["python3", "python"]
+    };
+    for cand in candidates {
+        if std::process::Command::new(*cand)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return cand.to_string();
+        }
+    }
+    // Fallback to platform default if none detected
+    if cfg!(target_os = "windows") { "python".to_string() } else { "python3".to_string() }
+}
+
 fn finetune_python_dir() -> PathBuf {
     // Expect finetune/ next to cli/ at project root, or fallback to exe dir
     let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf())).unwrap_or_else(|| PathBuf::from("."));
@@ -168,13 +189,19 @@ pub async fn handle(args: FinetuneArgs) -> Result<()> {
             println!("  mlx      — Apple Silicon native (M1/M2/M3/M4)");
             println!("  torchtune— PyTorch native, MPS+CUDA, best transparency");
             println!("\nFinetune dir: {}", finetune_python_dir().display());
-            // Check python
-            let py = std::process::Command::new("python3").arg("--version").output();
-            if let Ok(o) = py {
-                println!("Python: {}", String::from_utf8_lossy(&o.stdout).trim());
-            } else {
-                println!("Python: not found");
+            // Check python — cross-platform
+            let py_candidates: &[&str] = if cfg!(target_os = "windows") { &["python", "py", "python3"] } else { &["python3", "python"] };
+            let mut py_ver: Option<String> = None;
+            for cand in py_candidates {
+                if let Ok(o) = std::process::Command::new(*cand).arg("--version").output() {
+                    if o.status.success() {
+                        let s = if !o.stdout.is_empty() { String::from_utf8_lossy(&o.stdout).trim().to_string() } else { String::from_utf8_lossy(&o.stderr).trim().to_string() };
+                        py_ver = Some(s);
+                        break;
+                    }
+                }
             }
+            if let Some(v) = py_ver { println!("Python: {}", v); } else { println!("Python: not found"); }
             // Check LM Studio URL
             println!("LM Studio: {}", crate::core::lm_studio_base_url());
             println!("\nQuick start:");
@@ -198,7 +225,13 @@ pub async fn handle(args: FinetuneArgs) -> Result<()> {
             use std::io::Write;
             for (rel, content) in files {
                 if content.trim().is_empty() { continue; }
-                let truncated = if content.len() > max_chars { &content[..max_chars] } else { &content };
+                let truncated = if content.len() > max_chars {
+                    let mut end = max_chars;
+                    while end > 0 && !content.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    &content[..end]
+                } else { &content };
                 // Create a training sample per file
                 let sample = match format.as_str() {
                     "alpaca" => serde_json::json!({
@@ -239,9 +272,10 @@ pub async fn handle(args: FinetuneArgs) -> Result<()> {
                 anyhow::bail!("Dataset not found: {}", dataset.display());
             }
             if dry_run {
+                let py = python_bin();
                 println!("\n[dry-run] Would run:");
-                println!("  python3 {} --backend {} --base {} --dataset {} --output {} --rank {} --alpha {} --max-seq-len {} --epochs {} --lr {} --batch {} --grad-accum {}",
-                    train_script.display(), bk, base, dataset.display(), output.display(), rank, alpha, max_seq_len, epochs, lr, batch, grad_accum);
+                println!("  {} {} --backend {} --base {} --dataset {} --output {} --rank {} --alpha {} --max-seq-len {} --epochs {} --lr {} --batch {} --grad-accum {}",
+                    py, train_script.display(), bk, base, dataset.display(), output.display(), rank, alpha, max_seq_len, epochs, lr, batch, grad_accum);
                 return Ok(());
             }
             if !train_script.exists() {
@@ -252,7 +286,8 @@ pub async fn handle(args: FinetuneArgs) -> Result<()> {
                 println!("  Install deps: pip install -r {}/requirements.txt", py_dir.display());
             }
             println!("\n{} Launching training…", style("→").cyan());
-            let status = std::process::Command::new("python3")
+            let py = python_bin();
+            let status = std::process::Command::new(py)
                 .arg(&train_script)
                 .arg("--backend").arg(&bk)
                 .arg("--base").arg(&base)
@@ -277,14 +312,16 @@ pub async fn handle(args: FinetuneArgs) -> Result<()> {
             let script = py_dir.join("merge.py");
             println!("Merge adapter {} into base {} → {}", adapter.display(), base, out.display());
             if dry_run {
-                println!("[dry-run] python3 {} --base {} --adapter {} --out {}", script.display(), base, adapter.display(), out.display());
+                let py = python_bin();
+                println!("[dry-run] {} {} --base {} --adapter {} --out {}", py, script.display(), base, adapter.display(), out.display());
                 return Ok(());
             }
             if !script.exists() {
                 std::fs::create_dir_all(&py_dir)?;
                 std::fs::write(&script, minimal_merge_py())?;
             }
-            let status = std::process::Command::new("python3").arg(&script).arg("--base").arg(&base).arg("--adapter").arg(&adapter).arg("--out").arg(&out).status()?;
+            let py = python_bin();
+            let status = std::process::Command::new(py).arg(&script).arg("--base").arg(&base).arg("--adapter").arg(&adapter).arg("--out").arg(&out).status()?;
             if !status.success() { anyhow::bail!("Merge failed"); }
             println!("{} Merged → {}", style("✓").green(), out.display());
         }
@@ -294,14 +331,16 @@ pub async fn handle(args: FinetuneArgs) -> Result<()> {
             let script = py_dir.join("quantize.py");
             println!("Quantize {} → {} (quant: {})", model.display(), out.display(), quant);
             if dry_run {
-                println!("[dry-run] python3 {} --model {} --out {} --quant {}", script.display(), model.display(), out.display(), quant);
+                let py = python_bin();
+                println!("[dry-run] {} {} --model {} --out {} --quant {}", py, script.display(), model.display(), out.display(), quant);
                 return Ok(());
             }
             if !script.exists() {
                 std::fs::create_dir_all(&py_dir)?;
                 std::fs::write(&script, minimal_quantize_py())?;
             }
-            let status = std::process::Command::new("python3").arg(&script).arg("--model").arg(&model).arg("--out").arg(&out).arg("--quant").arg(&quant).status()?;
+            let py = python_bin();
+            let status = std::process::Command::new(py).arg(&script).arg("--model").arg(&model).arg("--out").arg(&out).arg("--quant").arg(&quant).status()?;
             if !status.success() { anyhow::bail!("Quantize failed"); }
             println!("{} GGUF at {} — load in LM Studio (Add Model → Local File)", style("✓").green(), out.display());
         }

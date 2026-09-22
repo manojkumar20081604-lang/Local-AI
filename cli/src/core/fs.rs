@@ -45,7 +45,7 @@ fn scan_dir(root: &Path, current: &Path, files: &mut Vec<ProjectFile>) -> Result
             continue;
         }
         let relative = path.strip_prefix(root).context("Failed to calc relative path")?;
-        let rel_str = relative.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+        let rel_str = relative.to_string_lossy().replace('\\', "/");
         if path.is_dir() {
             files.push(ProjectFile {
                 name: name.clone(),
@@ -240,7 +240,7 @@ fn collect_recursive(root: &Path, current: &Path, out: &mut Vec<(String, String)
         if content.len() > 1_000_000 {
             continue;
         }
-        let rel = path.strip_prefix(root)?.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+        let rel = path.strip_prefix(root)?.to_string_lossy().replace('\\', "/");
         out.push((rel, content));
     }
     Ok(())

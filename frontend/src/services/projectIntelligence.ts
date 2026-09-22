@@ -263,7 +263,7 @@ export function rankRelevantProjectFiles(
     .map((file) => {
       const pathLower = file.path.toLowerCase();
       const nameLower = file.name.toLowerCase();
-      const pathParts: string[] = pathLower.split(/[\/]+/).filter(Boolean);
+      const pathParts: string[] = pathLower.split(/[\/\\]+/).filter(Boolean);
 
       let score = 0;
       const reasons: string[] = [];

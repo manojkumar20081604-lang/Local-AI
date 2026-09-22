@@ -127,6 +127,28 @@ pub struct ProjectFile {
     pub is_directory: bool,
 }
 
+fn is_ignored_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "node_modules"
+            | ".git"
+            | "target"
+            | "dist"
+            | "build"
+            | ".next"
+            | ".idea"
+            | ".vscode"
+            | "__pycache__"
+            | ".venv"
+            | "venv"
+            | ".cache"
+            | "coverage"
+            | ".fastembed_cache"
+            | ".huggingface"
+    ) || name.starts_with(".fastembed")
+        || name.starts_with("models--")
+}
+
 fn scan_project_directory(
     root: &std::path::Path,
     current: &std::path::Path,
@@ -142,15 +164,7 @@ fn scan_project_directory(
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if name == "node_modules"
-            || name == ".git"
-            || name == "target"
-            || name == "dist"
-            || name == "build"
-            || name == ".next"
-            || name == ".idea"
-            || name == ".vscode"
-        {
+        if is_ignored_dir(&name) {
             continue;
         }
 
@@ -158,9 +172,7 @@ fn scan_project_directory(
             .strip_prefix(root)
             .map_err(|e| format!("Failed to calculate relative path: {e}"))?;
 
-        let relative_string = relative
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/");
+        let relative_string = relative.to_string_lossy().replace('\\', "/");
 
         if path.is_dir() {
             files.push(ProjectFile {
@@ -267,7 +279,21 @@ fn read_project_file(
         return Err("Project folder does not exist.".to_string());
     }
 
-    let file = root.join(&file_path);
+    // Reject unsafe paths before joining them to the project root (defense-in-depth, mirrors CLI).
+    let requested_path = std::path::Path::new(&file_path);
+
+    if requested_path.is_absolute() {
+        return Err("Absolute file paths are not allowed.".to_string());
+    }
+
+    if requested_path
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return Err("Parent directory paths are not allowed.".to_string());
+    }
+
+    let file = root.join(requested_path);
 
     if !file.exists() {
         return Err(format!("File does not exist: {}", file_path));
@@ -540,12 +566,20 @@ fn run_project_command(
         return Err("Project folder is not a directory.".to_string());
     }
 
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&command)
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to execute command: {e}"))?;
+    let output = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", &command])
+            .current_dir(&root)
+            .output()
+            .map_err(|e| format!("Failed to execute command: {e}"))?
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .current_dir(&root)
+            .output()
+            .map_err(|e| format!("Failed to execute command: {e}"))?
+    };
 
     Ok(CommandResult {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -598,23 +632,8 @@ fn read_project_files(
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
 
-            // Ignore generated/metadata directories.
-            if path.is_dir()
-                && matches!(
-                    name.as_str(),
-                    "node_modules"
-                        | ".git"
-                        | "target"
-                        | "dist"
-                        | "build"
-                        | ".next"
-                        | ".idea"
-                        | ".vscode"
-                        | "__pycache__"
-                        | ".venv"
-                        | "venv"
-                )
-            {
+            // Ignore generated/metadata directories — aligned with cli/src/core/fs.rs:16
+            if path.is_dir() && is_ignored_dir(&name) {
                 continue;
             }
 
@@ -672,9 +691,7 @@ fn read_project_files(
                 .strip_prefix(root)
                 .map_err(|e| format!("Failed to calculate relative path: {e}"))?;
 
-            let relative_path = relative
-                .to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/");
+            let relative_path = relative.to_string_lossy().replace('\\', "/");
 
             files.push((relative_path, content));
         }

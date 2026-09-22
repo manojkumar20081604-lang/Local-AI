@@ -225,7 +225,7 @@ static FASTEMBED_SINGLETON: OnceLock<Result<Arc<dyn Embedder>, String>> = OnceLo
 
 fn is_fastembed_cached(model_name: &str) -> bool {
     // Check hf-hub cache for model, e.g. ~/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5
-    let cache_base = dirs::cache_dir().map(|p| p.join("huggingface/hub")).unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    let cache_base = dirs::cache_dir().map(|p| p.join("huggingface/hub")).unwrap_or_else(|| std::env::temp_dir().join("huggingface/hub"));
     let safename = model_name.replace('/', "--");
     let model_dir = cache_base.join(format!("models--{}", safename));
     model_dir.exists()

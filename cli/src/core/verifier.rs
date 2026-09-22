@@ -361,29 +361,44 @@ pub fn try_verify_with_python(
     grounding_mode: &str,
 ) -> Option<VerifierReport> {
     let script = find_verify_script(project)?;
-    // Write answer to temp file to avoid arg length limits and escaping
+    // Write answer to temp file to avoid arg length limits and escaping (cross-platform temp_dir)
     let mut tmp = std::env::temp_dir().join(format!("local-ai-answer-{}.txt", uuid::Uuid::new_v4()));
-    // Use project id as fallback if uuid not available
     if let Err(_) = std::fs::write(&tmp, response) {
-        tmp = std::path::PathBuf::from("/tmp/local-ai-answer.txt");
+        tmp = std::env::temp_dir().join("local-ai-answer.txt");
         if std::fs::write(&tmp, response).is_err() { return None; }
     }
-    // Choose python binary
-    let python = if std::process::Command::new("python3").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        "python3"
-    } else if std::process::Command::new("python").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
-        "python"
+    // Choose python binary — cross-platform: Windows uses `python`/`py`, Unix uses `python3`/`python`
+    let candidates: &[&str] = if cfg!(target_os = "windows") {
+        &["python", "py", "python3"]
     } else {
-        let _ = std::fs::remove_file(&tmp);
-        return None;
+        &["python3", "python"]
+    };
+    let mut python: Option<&str> = None;
+    for cand in candidates {
+        if std::process::Command::new(*cand).arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+            python = Some(*cand);
+            break;
+        }
+    }
+    let python = match python {
+        Some(p) => p,
+        None => {
+            let _ = std::fs::remove_file(&tmp);
+            return None;
+        }
     };
     // Build source args: use project file list as --sources (first 20 to avoid too many args)
     // For external, we pass --sources-dir as project root for full scan, plus explicit --sources for precision
     // Use absolute paths so Python can find files regardless of cwd
-    let file_args: Vec<String> = files.iter().filter(|f| !f.is_directory).take(20).map(|f| {
+    let file_args: Vec<String> = files.iter().filter(|f| !f.is_directory).take(20).filter_map(|f| {
+        // Validate path before joining — prevent absolute or traversal from poisoned project file list
+        let p = std::path::Path::new(&f.path);
+        if p.is_absolute() || p.components().any(|c| c == std::path::Component::ParentDir) {
+            return None;
+        }
         if let Some(root) = project.folder_path.as_deref() {
-            std::path::Path::new(root).join(&f.path).to_string_lossy().to_string()
-        } else { f.path.clone() }
+            Some(std::path::Path::new(root).join(p).to_string_lossy().to_string())
+        } else { Some(f.path.clone()) }
     }).collect();
     let mut cmd = std::process::Command::new(python);
     cmd.arg(&script)
@@ -398,8 +413,23 @@ pub fn try_verify_with_python(
         cmd.arg("--sources");
         for fa in file_args { cmd.arg(fa); }
     }
-    // Timeout 5s (like provider health_check)
-    let output = cmd.output();
+    // Timeout 5s (like provider health_check) — avoid hanging on large model load
+    let output = {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let out = cmd.output();
+            let _ = tx.send(out);
+        });
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(res) => res,
+            Err(_) => {
+                let _ = std::fs::remove_file(&tmp);
+                return None;
+            }
+        }
+    };
     let _ = std::fs::remove_file(&tmp);
     let out = match output {
         Ok(o) if o.status.success() || o.status.code() == Some(2) => o, // 2 = hallucinated in strict but still valid report

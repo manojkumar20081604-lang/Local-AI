@@ -87,10 +87,28 @@ pub async fn handle(args: DoctorArgs) -> Result<()> {
         println!("  Ollama:    https://ollama.com  (ollama serve && ollama pull llama3.1:8b)");
     }
 
-    // Python
-    let py = std::process::Command::new("python3").arg("--version").output();
-    if let Ok(o) = py {
-        println!("Python: {}", String::from_utf8_lossy(&o.stdout).trim());
+    // Python — cross-platform (Windows: python/py, Unix: python3/python)
+    let py_candidates: &[&str] = if cfg!(target_os = "windows") {
+        &["python", "py", "python3"]
+    } else {
+        &["python3", "python"]
+    };
+    let mut py_found: Option<std::process::Output> = None;
+    for cand in py_candidates {
+        if let Ok(o) = std::process::Command::new(*cand).arg("--version").output() {
+            if o.status.success() {
+                py_found = Some(o);
+                break;
+            }
+        }
+    }
+    if let Some(o) = py_found {
+        let ver = if !o.stdout.is_empty() {
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        } else {
+            String::from_utf8_lossy(&o.stderr).trim().to_string()
+        };
+        println!("Python: {}", ver);
     } else {
         println!("Python: not found");
     }

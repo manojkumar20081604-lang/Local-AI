@@ -154,7 +154,11 @@ pub async fn execute_tool(project: &Project, tool_call: &ToolCall) -> Result<Val
             let path = tool_call.parsed_args.get("path").and_then(|v| v.as_str()).context("Missing 'path'")?;
             match core_fs::read_project_file(project, path) {
                 Ok(content) => {
-                    let snippet = if content.len() > 4000 { content[..4000].to_string() + "\n...[truncated]" } else { content };
+                    let snippet = if content.len() > 4000 {
+                        let mut end = 4000;
+                        while end > 0 && !content.is_char_boundary(end) { end -= 1; }
+                        content[..end].to_string() + "\n...[truncated]"
+                    } else { content };
                     Ok(json!({"path": path, "content": snippet, "exists": true}))
                 }
                 Err(e) => Ok(json!({"path": path, "error": e.to_string(), "exists": false})),
@@ -181,10 +185,10 @@ pub async fn execute_tool(project: &Project, tool_call: &ToolCall) -> Result<Val
         }
         "exec" => {
             let cmd = tool_call.parsed_args.get("command").and_then(|v| v.as_str()).context("Missing 'command'")?;
-            // In plan mode, block write/build commands
+            // In plan mode, block write/build commands — cross-platform (Unix + Windows)
             if crate::core::config::is_plan_mode() {
                 let lower = cmd.to_lowercase();
-                let blocked = ["rm ", "rm\t", "cargo build", "cargo run", "npm run build", "npm run dev", "npm install", "yarn build", "pnpm build", "make ", "cmake", "docker build", "go build", "touch ", "mkdir ", "mv ", "cp ", "chmod ", "sudo ", ">", ">>", "truncate", "dd "];
+                let blocked = ["rm ", "rm\t", "rm\n", "cargo build", "cargo run", "npm run build", "npm run dev", "npm install", "yarn build", "pnpm build", "make ", "cmake", "docker build", "go build", "touch ", "mkdir ", "mv ", "cp ", "chmod ", "sudo ", ">", ">>", "truncate", "dd ", "del ", "del\t", "rmdir", "powershell", "pwsh", "format ", "mkfs", "shutdown", "reboot", "diskpart", "xcopy", "robocopy", "move ", "copy "];
                 for pat in blocked {
                     if lower.contains(pat) {
                         anyhow::bail!("Plan mode is active — exec '{}' is blocked (write/build). Switch to --mode build to allow.", cmd);
@@ -192,8 +196,14 @@ pub async fn execute_tool(project: &Project, tool_call: &ToolCall) -> Result<Val
                 }
             }
             let result = core_fs::run_project_command(project, cmd)?;
-            let stdout = if result.stdout.len() > 4000 { result.stdout[..4000].to_string() + "\n...[truncated]" } else { result.stdout.clone() };
-            let stderr = if result.stderr.len() > 1000 { result.stderr[..1000].to_string() + "\n...[truncated]" } else { result.stderr.clone() };
+            let truncate_safe = |s: &str, n: usize| -> String {
+                if s.len() <= n { return s.to_string(); }
+                let mut end = n;
+                while end > 0 && !s.is_char_boundary(end) { end -= 1; }
+                s[..end].to_string() + "\n...[truncated]"
+            };
+            let stdout = truncate_safe(&result.stdout, 4000);
+            let stderr = truncate_safe(&result.stderr, 1000);
             Ok(json!({"command": cmd, "stdout": stdout, "stderr": stderr, "success": result.success, "exit_code": result.exit_code}))
         }
         "web_fetch" => {
@@ -214,7 +224,11 @@ pub async fn execute_tool(project: &Project, tool_call: &ToolCall) -> Result<Val
                 anyhow::bail!("HTTP {} for {}", status, url);
             }
             let text = resp.text().await.context("Failed to read body")?;
-            let snippet = if text.len() > max_chars { text[..max_chars].to_string() + "\n...[truncated]" } else { text };
+            let snippet = if text.len() > max_chars {
+                let mut end = max_chars;
+                while end > 0 && !text.is_char_boundary(end) { end -= 1; }
+                text[..end].to_string() + "\n...[truncated]"
+            } else { text };
             Ok(json!({"url": url, "content": snippet, "status": status.as_u16(), "content_type": headers.get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string()}))
         }
         _ => anyhow::bail!("Unknown tool: {}", tool_call.name),

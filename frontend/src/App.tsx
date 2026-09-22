@@ -221,7 +221,7 @@ const [rightTab, setRightTab] = useState<
       const folderPath = selected;
 
       const folderName =
-        folderPath.split("/").filter(Boolean).pop() ??
+        folderPath.split(/[\/\\]+/).filter(Boolean).pop() ??
         "New Project";
 
       const now = new Date().toISOString();
@@ -443,7 +443,7 @@ function parseEditResponses(response: string): PendingEdit[] {
   }
 
    const execRegex =
-    /<EXEC>\s*COMMAND:\s*(.+?)\s*<\/EXEC>/gis;
+     /<EXEC>\s*COMMAND:\s*([\s\S]+?)\s*<\/EXEC>/gi;
 
   for (const match of response.matchAll(execRegex)) {
     proposals.push({
@@ -2556,7 +2556,7 @@ function buildTree(
 
   for (const file of files) {
     const parts = file.path
-      .split("/")
+      .split(/[\/\\]+/)
       .filter(Boolean);
 
     let current = roots;

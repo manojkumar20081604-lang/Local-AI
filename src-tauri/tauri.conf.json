@@ -19,7 +19,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self' ipc: http://ipc.localhost http://localhost:* https://cdn.jsdelivr.net ws://localhost:*; script-src 'self'; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
