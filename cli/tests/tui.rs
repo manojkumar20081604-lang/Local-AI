@@ -167,3 +167,55 @@ fn test_caps_respect_no_color_env() {
         std::env::remove_var("NO_COLOR");
     }
 }
+
+#[test]
+fn test_is_model_not_found_cases() {
+    use local_ai::core::provider::is_model_not_found;
+    // Ollama native shape.
+    assert!(is_model_not_found(r#"{"error":"model 'foo' not found"}"#));
+    // OpenAI-compat shape (the exact user-facing failure).
+    assert!(is_model_not_found(
+        r#"Ollama OpenAI compat error 404 Not Found: {"error":{"message":"model 'x' not found","type":"not_found_error","param":null,"code":null}}"#
+    ));
+    assert!(is_model_not_found("model does not exist"));
+    assert!(is_model_not_found("Ollama /api/chat error 404: Not Found"));
+    // Unrelated failures must NOT trigger fallback.
+    assert!(!is_model_not_found("connection refused"));
+    assert!(!is_model_not_found("request timed out"));
+    assert!(!is_model_not_found(""));
+}
+
+#[test]
+fn test_friendly_error_extracts_server_message() {
+    use local_ai::core::provider::friendly_error;
+    let compat = r#"{"error":{"message":"model 'x' not found","type":"not_found_error","param":null,"code":null}}"#;
+    let out = friendly_error(compat, "Ollama", "x");
+    assert!(out.contains("isn't available"), "{}", out);
+    assert!(out.contains("model 'x' not found"), "{}", out);
+    assert!(!out.contains("\"type\""), "no raw JSON: {}", out);
+    let native = r#"{"error":"model 'y' not found"}"#;
+    let out = friendly_error(native, "Ollama", "y");
+    assert!(out.contains("model 'y' not found"), "{}", out);
+    // JSON embedded in a longer provider line (native status prefix).
+    let embedded = r#"Ollama /api/chat error 404 Not Found: {"error":"model 'z' not found"}"#;
+    let out = friendly_error(embedded, "Ollama", "z");
+    assert!(out.contains("model 'z' not found"), "{}", out);
+    assert!(!out.contains("/api/chat error"), "{}", out);
+    // Idempotent: wrapping twice changes nothing.
+    let twice = friendly_error(&out, "auto", "z");
+    assert_eq!(twice, out);
+    // Non-404 errors keep provider context without the not-available claim.
+    let out = friendly_error("connection refused", "Ollama", "z");
+    assert!(out.contains("Ollama: connection refused"), "{}", out);
+}
+
+#[test]
+fn test_fallback_model_skips_failed() {
+    use local_ai::core::provider::fallback_model;
+    let avail = vec!["bad".to_string(), "good".to_string()];
+    assert_eq!(fallback_model("bad", &avail).as_deref(), Some("good"));
+    assert_eq!(fallback_model("good", &avail).as_deref(), Some("bad"));
+    let empty: Vec<String> = Vec::new();
+    assert_eq!(fallback_model("bad", &empty), None);
+    assert_eq!(fallback_model("only", &["only".to_string()]), None);
+}

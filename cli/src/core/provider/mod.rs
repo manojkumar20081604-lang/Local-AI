@@ -148,6 +148,63 @@ pub fn pick_model(
     available.first().cloned()
 }
 
+/// First available model that is NOT `failed` (self-healing fallback).
+/// `None` when there is nothing else to try.
+pub fn fallback_model(failed: &str, available: &[String]) -> Option<String> {
+    available.iter().find(|m| m.as_str() != failed).cloned()
+}
+
+/// `true` when a provider error means "this model id isn't servable"
+/// (Ollama native `model 'x' not found`, compat `not_found_error`, 404s).
+/// Used to skip doomed retries/fallbacks and to self-heal to another model.
+pub fn is_model_not_found(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("not_found")
+        || lower.contains("not found")
+        || lower.contains("does not exist")
+        || lower.contains("model_not_found")
+        || lower.contains("404")
+}
+
+/// Human-readable provider error. Extracts the server's message from
+/// common JSON shapes instead of dumping raw payloads into chat.
+/// Idempotent: already-friendly messages pass through unchanged.
+pub fn friendly_error(err: &str, provider: &str, model: &str) -> String {
+    if err.contains("isn't available here") {
+        return err.chars().take(300).collect();
+    }
+    let message = extract_server_message(err).unwrap_or_else(|| err.to_string());
+    let short: String = message.chars().take(300).collect();
+    if is_model_not_found(err) {
+        format!(
+            "{}: model '{}' isn't available here — {} (pick a listed one: `local-ai models list`)",
+            provider, model, short
+        )
+    } else {
+        format!("{}: {}", provider, short)
+    }
+}
+
+/// Pull `message` out of `{"error":{"message":…}}`, `{"error":"…"}`, or the
+/// same JSON embedded in a longer line (`Ollama /api/chat error 404: {…}`).
+fn extract_server_message(err: &str) -> Option<String> {
+    let parse = |s: &str| -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(s).ok()?;
+        v.pointer("/error/message")
+            .or_else(|| v.pointer("/message"))
+            .and_then(|m| m.as_str().map(|s| s.to_string()))
+            .or_else(|| {
+                // Plain-string error bodies: {"error": "model 'x' not found"}.
+                v.get("error").and_then(|e| e.as_str()).map(|s| s.to_string())
+            })
+    };
+    if let Some(m) = parse(err) {
+        return Some(m);
+    }
+    // JSON embedded after a prefix — retry from the first '{'.
+    err.find('{').and_then(|i| parse(&err[i..]))
+}
+
 /// Resolve the model id for a run. Explicit flags never touch the network;
 /// otherwise lists once and falls back to first available (a stale saved
 /// model degrades gracefully instead of failing the run).

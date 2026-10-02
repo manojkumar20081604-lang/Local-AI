@@ -739,10 +739,19 @@ fn palette_items(app: &App) -> Vec<&'static PaletteItem> {
 }
 
 async fn run_palette_selection(app: &mut App) -> Result<()> {
-    let items = palette_items(app);
-    let sel = items.get(app.palette_sel.min(items.len().saturating_sub(1))).map(|p| p.name);
+    // Typed arguments win: "/model foo" runs the full slash command
+    // instead of the bare palette action (otherwise args are unreachable).
+    let typed = app.input.trim_start_matches('/').trim().to_string();
+    let has_args = typed.split_whitespace().count() > 1;
     app.palette_open = false;
     app.input.clear();
+    if has_args {
+        run_slash(app, &typed).await;
+        return Ok(());
+    }
+    // Bare item: act on the highlighted row.
+    let items = palette_items(app);
+    let sel = items.get(app.palette_sel.min(items.len().saturating_sub(1))).map(|p| p.name);
     match sel {
         Some("/quit") => app.should_quit = true,
         Some("/clear") => {
@@ -789,8 +798,34 @@ async fn run_slash(app: &mut App, rest: &str) {
         },
         "model" => match parts.next() {
             Some(id) => {
+                // Validate against the live list when reachable: a typo'd id
+                // 404s at request time (now self-healed, but warn upfront).
+                let cfg = crate::core::config::load_config().unwrap_or_default();
+                let listed = crate::core::provider::list_models_unified(
+                    &app.provider_kind,
+                    &app.provider_url,
+                    &cfg,
+                )
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>();
                 app.model_override = Some(id.to_string());
-                push_sys(app, format!("model override → {}", id));
+                if listed.is_empty() {
+                    push_sys(app, format!("model override → {} (provider unreachable — unverified)", id));
+                } else if listed.iter().any(|m| m == id) {
+                    push_sys(app, format!("model override → {}", id));
+                } else {
+                    push_sys(
+                        app,
+                        format!(
+                            "model override → {} (NOT listed — requests will fall back; available: {})",
+                            id,
+                            listed.join(", ")
+                        ),
+                    );
+                }
             }
             None => list_models(app).await,
         },

@@ -499,7 +499,8 @@ async fn chat_once(
         Ok(s) if !s.is_empty() => s,
         Ok(_) => full.clone(),
         Err(e) => {
-            eprintln!("\n{} {} (provider={}, url={})", style("Error:").red(), e, provider_kind, if provider_url.is_empty() { "auto".into() } else { provider_url.clone() });
+            let friendly = provider::friendly_error(&e.to_string(), &provider_kind.to_string(), model);
+            eprintln!("\n{} {} (provider={}, url={})", style("Error:").red(), friendly, provider_kind, if provider_url.is_empty() { "auto".into() } else { provider_url.clone() });
             eprintln!("  Try: local-ai doctor  or  local-ai models list");
             return Ok(());
         }

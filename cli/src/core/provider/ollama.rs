@@ -120,10 +120,18 @@ impl Provider for OllamaProvider {
         match self.stream_native(base, model, messages.clone(), on_chunk).await {
             Ok(s) => Ok(s),
             Err(e) => {
+                let msg = e.to_string();
+                if super::is_model_not_found(&msg) {
+                    // A missing model 404s identically on compat — don't retry noise.
+                    return Err(anyhow::anyhow!(super::friendly_error(&msg, "Ollama", model)));
+                }
                 // Fallback to openai compat if native fails (e.g., old ollama not supporting /api/chat streaming the same way)
-                eprintln!("Ollama native chat failed ({}), trying OpenAI compat...", e);
+                super::super::ui_events::tui_warn("Ollama native chat failed, trying OpenAI compat…".to_string());
                 let openai_base = format!("{}/v1", base);
-                self.stream_openai_compat(&openai_base, model, messages, on_chunk).await
+                match self.stream_openai_compat(&openai_base, model, messages, on_chunk).await {
+                    Ok(s) => Ok(s),
+                    Err(e2) => Err(anyhow::anyhow!(super::friendly_error(&e2.to_string(), "Ollama", model))),
+                }
             }
         }
     }

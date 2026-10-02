@@ -503,17 +503,74 @@ pub async fn run_graph(
                 let mut sink = |chunk: &str| {
                     ui_events::emit(ui_events::UiEvent::ModelChunk { text: chunk.to_string() });
                 };
-                let answer = provider::stream_chat_unified(
+                let answer = match provider::stream_chat_unified(
                     &ctx.provider_kind,
                     &ctx.provider_url,
                     cfg,
                     &model_id,
-                    messages,
+                    messages.clone(),
                     0.2,
                     &mut sink,
                 )
                 .await
-                .unwrap_or_else(|e| format!("(model error: {})", e));
+                {
+                    Ok(a) => a,
+                    Err(e) if provider::is_model_not_found(&e.to_string()) => {
+                        // Self-heal once: stale/typo'd model id → first servable one.
+                        let available = provider::list_models_unified(
+                            &ctx.provider_kind,
+                            &ctx.provider_url,
+                            cfg,
+                        )
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|m| m.id)
+                        .collect::<Vec<_>>();
+                        match provider::fallback_model(&model_id, &available) {
+                            Some(fb) => {
+                                println!(
+                                    "  {} model '{}' not servable — falling back to '{}'",
+                                    style("→").dim(),
+                                    model_id,
+                                    fb
+                                );
+                                provider::stream_chat_unified(
+                                    &ctx.provider_kind,
+                                    &ctx.provider_url,
+                                    cfg,
+                                    &fb,
+                                    messages,
+                                    0.2,
+                                    &mut sink,
+                                )
+                                .await
+                                .unwrap_or_else(|e2| {
+                                    format!(
+                                        "(model error: {})",
+                                        provider::friendly_error(
+                                            &e2.to_string(),
+                                            &ctx.provider_kind.to_string(),
+                                            &fb
+                                        )
+                                    )
+                                })
+                            }
+                            None => format!(
+                                "(model error: {})",
+                                provider::friendly_error(
+                                    &e.to_string(),
+                                    &ctx.provider_kind.to_string(),
+                                    &model_id
+                                )
+                            ),
+                        }
+                    }
+                    Err(e) => format!(
+                        "(model error: {})",
+                        provider::friendly_error(&e.to_string(), &ctx.provider_kind.to_string(), &model_id)
+                    ),
+                };
                 orch.record_tool_calls(1);
                 core_agents::append_trace(
                     trace_path,

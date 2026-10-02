@@ -151,8 +151,43 @@ pub async fn answer_once(
         full.push_str(chunk);
         ui_events::emit(ui_events::UiEvent::ModelChunk { text: chunk.to_string() });
     };
-    provider::stream_chat_unified(provider_kind, provider_url, &cfg, &model_id, messages, 0.4, &mut sink)
-        .await?;
+    let first_err = match provider::stream_chat_unified(provider_kind, provider_url, &cfg, &model_id, messages.clone(), 0.4, &mut sink).await {
+        Ok(_) => None,
+        Err(e) => Some(e.to_string()),
+    };
+    if let Some(err) = first_err {
+        if provider::is_model_not_found(&err) {
+            // Self-heal once: a stale/typo'd id (e.g. unpulled cloud model)
+            // falls back to a servable one instead of a dead chat.
+            let available = provider::list_models_unified(provider_kind, provider_url, &cfg)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>();
+            if let Some(fb) = provider::fallback_model(&model_id, &available) {
+                ui_events::emit(ui_events::UiEvent::Warn {
+                    line: format!(
+                        "Model '{}' isn't servable here — falling back to '{}' (pin it: /model {}).",
+                        model_id, fb, fb
+                    ),
+                });
+                provider::stream_chat_unified(provider_kind, provider_url, &cfg, &fb, messages, 0.4, &mut sink)
+                    .await
+                    .map_err(|e2| {
+                        anyhow::anyhow!(provider::friendly_error(
+                            &e2.to_string(),
+                            &provider_kind.to_string(),
+                            &fb
+                        ))
+                    })?;
+            } else {
+                anyhow::bail!(provider::friendly_error(&err, &provider_kind.to_string(), &model_id));
+            }
+        } else {
+            anyhow::bail!(provider::friendly_error(&err, &provider_kind.to_string(), &model_id));
+        }
+    }
     ui_events::emit(ui_events::UiEvent::ModelDone { full: full.clone() });
     Ok(full)
 }
