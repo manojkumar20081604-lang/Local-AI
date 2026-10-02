@@ -491,6 +491,7 @@ fn apply_event(app: &mut App, ev: UiEvent) {
                 app.messages.push(ChatLine { role: "ai", text });
             }
             app.pending_answer.clear();
+            app.chat_scroll = 0;
         }
         UiEvent::AnswerDone { .. } => {
             // Q&A tasks have no AgentComplete: release the input here or the
@@ -632,6 +633,20 @@ async fn handle_terminal_event(app: &mut App, ev: CEvent) -> Result<()> {
         (KeyCode::PageDown, _) => {
             app.chat_scroll = app.chat_scroll.saturating_sub(10);
         }
+        // Shift+↑/↓ scrolls the chat on keyboards without PgUp/PgDn.
+        (KeyCode::Up, KeyModifiers::SHIFT) => {
+            app.chat_scroll = app.chat_scroll.saturating_add(5);
+        }
+        (KeyCode::Down, KeyModifiers::SHIFT) => {
+            app.chat_scroll = app.chat_scroll.saturating_sub(5);
+        }
+        // End jumps back to the live tail; Home to the very first line.
+        (KeyCode::End, _) => {
+            app.chat_scroll = 0;
+        }
+        (KeyCode::Home, _) => {
+            app.chat_scroll = u16::MAX;
+        }
         (KeyCode::Up, _) if app.palette_open => {
             app.palette_sel = app.palette_sel.saturating_sub(1);
         }
@@ -746,6 +761,7 @@ async fn submit_input(app: &mut App) {
 async fn start_goal(app: &mut App, goal: String) {
     use intelligence::ProjectIntent;
     app.messages.push(ChatLine { role: "user", text: goal.clone() });
+    app.chat_scroll = 0;
     app.run_goal_text = goal.clone();
     app.running = true;
     app.run_started = Instant::now();
@@ -896,7 +912,8 @@ fn print_palette_help(app: &mut App) {
     push_sys(
         app,
         "commands: /help /model [/model <id>] /theme [/theme <name>] /ascii /animation /clear /quit — \
-         keys: Enter send · ↑↓ history/tasks · Tab panels · PgUp/PgDn scroll · Ctrl+P palette · Ctrl+C cancel · Ctrl+D quit"
+         keys: Enter send · ↑↓ history/tasks · Shift+↑↓ or PgUp/PgDn scroll chat · Home top · End follow · \
+         Tab panels · Ctrl+P palette · Ctrl+C cancel · Ctrl+D quit"
             .into(),
     );
 }
@@ -1130,16 +1147,28 @@ fn textwrap_chunks(text: &str, width: usize) -> Vec<String> {
 
 fn render_chat(f: &mut Frame, app: &mut App, area: Rect) {
     let lines = chat_lines(app, area.width as usize);
-    let total = lines.len() as u16;
     let visible = area.height.saturating_sub(2) as usize;
-    let max_scroll = total.saturating_sub(visible as u16);
-    app.chat_scroll = app.chat_scroll.min(max_scroll);
-    let scroll = max_scroll.saturating_sub(app.chat_scroll);
-    let title = if app.focus == Focus::Chat { " CHAT ● " } else { " CHAT " };
+    let (scroll, hidden) = scroll_view(app.chat_scroll, lines.len(), visible);
+    app.chat_scroll = hidden;
+    let title = if hidden > 0 {
+        format!(" CHAT ↑{} ", hidden)
+    } else if app.focus == Focus::Chat {
+        " CHAT ● ".to_string()
+    } else {
+        " CHAT ".to_string()
+    };
     let block = Block::bordered()
         .border_style(Style::default().fg(app.theme.border))
         .title(Span::styled(title, Style::default().fg(app.theme.accent)));
     f.render_widget(Paragraph::new(lines).block(block).scroll((scroll, 0)), area);
+}
+
+/// Scroll math (pure, tested): `hidden` lines are held back from the live
+/// tail. Returns the paragraph scroll offset plus the clamped hidden count.
+fn scroll_view(hidden: u16, total: usize, visible: usize) -> (u16, u16) {
+    let max_hidden = total.saturating_sub(visible).min(u16::MAX as usize) as u16;
+    let hidden = hidden.min(max_hidden);
+    (max_hidden.saturating_sub(hidden), hidden)
 }
 
 fn render_tasks(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1521,5 +1550,86 @@ mod answer_done_tests {
         apply_event(&mut app, UiEvent::AnswerDone { ok: true });
         assert!(!app.running);
         assert!(app.run_handle.is_none());
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::{scroll_view, apply_event};
+    use crate::core::ui_events::UiEvent;
+
+    #[test]
+    fn scroll_math_follows_and_clamps() {
+        // Empty/short content: nothing hidden, offset zero.
+        assert_eq!(scroll_view(0, 0, 20), (0, 0));
+        assert_eq!(scroll_view(0, 5, 20), (0, 0));
+        // Full tail: hidden 0 → offset at max (bottom).
+        assert_eq!(scroll_view(0, 30, 20), (10, 0));
+        // Hold 4 back → offset 4 above the bottom, hidden preserved.
+        assert_eq!(scroll_view(4, 30, 20), (6, 4));
+        // Over-scroll clamps to the top line.
+        assert_eq!(scroll_view(9999, 30, 20), (0, 10));
+        assert_eq!(scroll_view(u16::MAX, 30, 20), (0, 10));
+    }
+
+    #[test]
+    fn finished_answer_returns_to_live_tail() {
+        use super::{
+            App, AnimeState, Focus, Project, ProviderKind, TermCaps, Theme,
+        };
+        use std::time::Instant;
+        let mut app = App {
+            proj: Project {
+                id: "test".into(),
+                name: "demo".into(),
+                created_at: String::new(),
+                updated_at: String::new(),
+                folder_path: None,
+                messages: Vec::new(),
+            },
+            files: Vec::new(),
+            branch: String::new(),
+            git_summary: String::new(),
+            provider_kind: ProviderKind::Auto,
+            provider_url: String::new(),
+            model: None,
+            model_override: None,
+            theme: Theme::default(),
+            theme_idx: 0,
+            caps: TermCaps { colors: true, unicode: true, animation: false },
+            anime: AnimeState::Thinking,
+            frame: 0,
+            line_idx: 0,
+            last_event: Instant::now(),
+            started: Instant::now(),
+            messages: Vec::new(),
+            pending_answer: String::new(),
+            chat_scroll: 25,
+            tasks: Vec::new(),
+            task_sel: 0,
+            total_steps: 0,
+            tools: Vec::new(),
+            tool_count: 0,
+            tests_pass: 0,
+            tests_fail: 0,
+            input: String::new(),
+            history: Vec::new(),
+            hist_idx: None,
+            focus: Focus::Chat,
+            palette_open: false,
+            palette_sel: 0,
+            approval: None,
+            running: false,
+            run_goal_text: String::new(),
+            run_started: Instant::now(),
+            run_handle: None,
+            continue_offer: None,
+            should_quit: false,
+            width: 0,
+            height: 0,
+        };
+        apply_event(&mut app, UiEvent::ModelDone { full: "done".into() });
+        assert_eq!(app.chat_scroll, 0);
+        assert!(app.messages.iter().any(|m| m.text == "done"));
     }
 }

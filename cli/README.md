@@ -184,7 +184,8 @@ local-ai agent run "fix tests" --project MyApp --yes --test-cmd "cargo test"  # 
 # streaming chat + live plan/tasks + project tree + tool feed + test dashboard.
 # Approvals arrive as modals ([a] once [s] session [r] reject) with the same
 # diff preview; routes back into the agent loop via oneshot (fail-closed).
-# Keys: Enter send · ↑↓ history/tasks · Tab panels · PgUp/PgDn scroll ·
+# Keys: Enter send · ↑↓ history/tasks · Shift+↑↓ or PgUp/PgDn scroll chat
+# (↑N shows held-back lines, End jumps to live tail) · Home top · Tab panels ·
 # Ctrl+P palette (/help /model /theme /ascii /animation /clear /quit) ·
 # Ctrl+C cancel run · Ctrl+D quit. Layout collapses 140→80→<80 cols.
 # Needs a terminal; scripts/CI keep the plain subcommands (+ global --plain).
