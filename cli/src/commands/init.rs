@@ -213,9 +213,29 @@ async fn ask_provider(
     let up = setup::test_connection(&opt.kind, &opt.url).await;
     if up {
         println!("{} {}", style("✓").green(), opt.label);
-    } else {
-        println!("{} {} — not running at {}.", style("!").yellow(), opt.label, opt.url);
-        println!("  Start it (LM Studio: enable Local Server · Ollama: `ollama serve`), continuing offline-capable.");
+        return Some((opt.kind.clone(), opt.url.clone(), true));
     }
-    Some((opt.kind.clone(), opt.url.clone(), up))
+    println!("{} {} — not running at {}.", style("!").yellow(), opt.label, opt.url);
+    // A dead pick must not strand the user in a model-less TUI: offer a
+    // provider that is actually up (usually the fix is one keypress).
+    if let Some(alt) = options.iter().zip(ups.iter()).find_map(|(o, up)| {
+        if *up && o.kind != opt.kind {
+            Some(o)
+        } else {
+            None
+        }
+    }) {
+        let switch = dialoguer::Confirm::new()
+            .with_prompt(format!("{} is up — use it instead?", alt.label))
+            .default(true)
+            .interact_opt()
+            .unwrap_or(None)
+            .unwrap_or(false);
+        if switch {
+            println!("{} {}", style("✓").green(), alt.label);
+            return Some((alt.kind.clone(), alt.url.clone(), true));
+        }
+    }
+    println!("  Start it (LM Studio: enable Local Server · Ollama: `ollama serve`), continuing offline-capable.");
+    Some((opt.kind.clone(), opt.url.clone(), false))
 }

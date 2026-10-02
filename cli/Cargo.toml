@@ -34,6 +34,7 @@ blake3 = "1.5"
 rayon = "1.10"
 ratatui = "0.30"
 crossterm = { version = "0.28", features = ["event-stream"] }
+unicode-width = "0.2"
 
 [profile.release]
 lto = true

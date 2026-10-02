@@ -1139,17 +1139,25 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_input(f: &mut Frame, app: &App, area: Rect) {
     let hint = if app.input.is_empty() { " Type a goal, / for commands…" } else { "" };
-    let text = format!("❯ {}{}", app.input, hint);
+    // ASCII prompt: guaranteed single-cell columns in every terminal.
+    let text = format!("> {}{}", app.input, hint);
     let block = Block::bordered()
         .border_style(Style::default().fg(app.theme.border))
         .title(Span::styled(" INPUT ", Style::default().fg(app.theme.accent)));
     f.render_widget(Paragraph::new(Line::from(Span::styled(text, Style::default().fg(Color::White)))).block(block), area);
-    // Cursor just past the input text.
-    let cx = area.x + 2 + app.input.chars().count() as u16;
+    // Cursor sits past the prompt + input using display widths, not char counts.
+    let cx = area.x.saturating_add(input_cursor_col(&app.input));
     let cy = area.y + 1;
     if cx < area.x + area.width && cy < area.y + area.height {
         f.set_cursor_position(ratatui::layout::Position::new(cx, cy));
     }
+}
+
+/// Display column of the cursor relative to the input box origin:
+/// border(1) + prompt("> ", 2) + display width of the typed text.
+fn input_cursor_col(input: &str) -> u16 {
+    use unicode_width::UnicodeWidthStr;
+    1 + 2 + UnicodeWidthStr::width(input) as u16
 }
 
 fn render_palette(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1342,5 +1350,20 @@ mod tests {
         terminal.draw(|f| render(f, &mut app)).unwrap();
         let text = screen_text(&terminal);
         assert!(text.contains("PERMISSION"), "{}", &text[..text.len().min(200)]);
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::input_cursor_col;
+
+    #[test]
+    fn cursor_accounts_for_display_width() {
+        // border(1) + "> "(2) + text width.
+        assert_eq!(input_cursor_col(""), 3);
+        assert_eq!(input_cursor_col("abc"), 6);
+        // CJK is double-cell: chars().count() would say 5, display says 7.
+        assert_eq!(input_cursor_col("日本"), 7);
+        assert_eq!(input_cursor_col("a日本b"), 9);
     }
 }
