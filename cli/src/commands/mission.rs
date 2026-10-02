@@ -424,8 +424,9 @@ async fn handle_resume(
         if yes { core_agents::ApprovalGate::Auto } else { core_agents::ApprovalGate::Always },
     );
     // Persist after every step (kill-safe).
-    let hook = |step_id: &str, status: &str| {
-        if let Ok(mut m) = core_missions::get_mission(&mission.id) {
+    let hook_mid = mission.id.clone();
+    let hook = move |step_id: &str, status: &str| {
+        if let Ok(mut m) = core_missions::get_mission(&hook_mid) {
             let _ = core_missions::record_step_status(&mut m, step_id, status);
         }
     };
@@ -440,7 +441,7 @@ async fn handle_resume(
         &mut orch,
         &mission.trace_path,
         &mission.id,
-        Some(&hook),
+        Some(std::sync::Arc::new(hook) as std::sync::Arc<dyn Fn(&str, &str) + Send + Sync>),
     )
     .await?;
 

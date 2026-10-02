@@ -32,6 +32,8 @@ tokio-stream = "0.1"
 fastembed = "5.13"
 blake3 = "1.5"
 rayon = "1.10"
+ratatui = "0.30"
+crossterm = { version = "0.28", features = ["event-stream"] }
 
 [profile.release]
 lto = true

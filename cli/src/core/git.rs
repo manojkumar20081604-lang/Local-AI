@@ -475,7 +475,7 @@ pub fn checkpoint_before_run(project: &Project, label: &str) -> Option<String> {
     match checkpoint_stash(project, label) {
         Ok(msg) => msg,
         Err(e) => {
-            eprintln!("checkpoint skipped: {}", e);
+            super::ui_events::tui_warn(format!("checkpoint skipped: {}", e));
             None
         }
     }

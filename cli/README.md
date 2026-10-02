@@ -120,6 +120,8 @@ local-ai config set provider.ollama.url http://localhost:11434
 # Chat (streaming, project-aware, grounded, saves to projects.json)
 local-ai                                        # bare: REPL in current dir (same as below)
 local-ai "fix the PDF crash"                    # bare: agent loop in current dir (approval-gated)
+local-ai tui --project MyApp                    # fullscreen anime command center (panels, diffs, approvals)
+local-ai tui --no-animation --ascii --theme matrix  # calm/portable mode; custom ~/.config/local-ai/theme.json
 local-ai chat "explain the auth flow" --project MyApp --model qwen/qwen3.5-9b
 local-ai chat --project MyApp                     # interactive REPL (/help, /clear, /history, /model, /grounding)
 local-ai chat "what is the architecture?" --show-context --show-verifier --grounding strict
@@ -163,6 +165,16 @@ local-ai agent run "fix tests" --project MyApp --yes --test-cmd "cargo test"  # 
 # Roles: planner (1.4 graph) → researcher (read-only) → coder (SEARCH-verified) → tester/debugger (1.2 loop) → reviewer (verifier + secrets/traversal)
 # Safety: budget (steps/tools/wall-time) + kill-switch (rm -rf /, mkfs, curl POST exfil blocked unless --approve dangerous)
 # Trace: ~/.cache/local-ai/<id>/missions/<ts>/trace.jsonl (every agent I/O, feeds Phase 4/5)
+
+# TUI — anime command center (new presentation layer over the same engine)
+# Header HUD (model/provider/branch/progress) + state-driven anime sidekick +
+# streaming chat + live plan/tasks + project tree + tool feed + test dashboard.
+# Approvals arrive as modals ([a] once [s] session [r] reject) with the same
+# diff preview; routes back into the agent loop via oneshot (fail-closed).
+# Keys: Enter send · ↑↓ history/tasks · Tab panels · PgUp/PgDn scroll ·
+# Ctrl+P palette (/help /model /theme /ascii /animation /clear /quit) ·
+# Ctrl+C cancel run · Ctrl+D quit. Layout collapses 140→80→<80 cols.
+# Needs a terminal; scripts/CI keep the plain subcommands (+ global --plain).
 
 # Index (hybrid retrieval — local embeddings, no cloud)
 local-ai index rebuild --project MyApp           # build ~/.cache/local-ai/<id>/index.json (chunk 1500/200, bge-small-en-v1.5 or TfIdf)

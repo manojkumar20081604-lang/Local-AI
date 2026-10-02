@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use crate::commands::{project, models, chat, files, exec, analyze, finetune, doctor, config, graph, index, git, memory, mission, browse, plan, debug, agent, bench, dataset, metrics, propose};
+use crate::commands::{project, models, chat, files, exec, analyze, finetune, doctor, config, graph, index, git, memory, mission, browse, plan, debug, agent, bench, dataset, metrics, propose, tui};
 
 #[derive(Parser)]
 #[command(name = "local-ai", version, about = "Local AI CLI — local model workspace + finetuning (all OS)")]
@@ -27,6 +27,10 @@ pub struct Cli {
     /// Extra MCP tool servers (repeatable): --mcp filesystem --mcp github
     #[arg(long, global = true)]
     pub mcp: Vec<String>,
+
+    /// Plain output: no colors or animations (scripts/CI friendly)
+    #[arg(long, global = true)]
+    pub plain: bool,
 
     /// Free-form goal with no subcommand: `local-ai "fix the PDF crash"`
     /// routes to the agent loop in the current directory.
@@ -85,4 +89,6 @@ pub enum Commands {
     Metrics(metrics::MetricsArgs),
     /// Self-improvement proposals as inspectable plan-graphs
     Propose(propose::ProposeArgs),
+    /// Fullscreen anime command center (needs an interactive terminal)
+    Tui(tui::TuiArgs),
 }

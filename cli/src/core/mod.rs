@@ -21,6 +21,7 @@ pub mod provider;
 pub mod router;
 pub mod symbols;
 pub mod tools;
+pub mod ui_events;
 pub mod verifier;
 
 // Keep old module for backwards compat — re-export as provider::lmstudio

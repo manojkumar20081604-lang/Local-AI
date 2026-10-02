@@ -53,6 +53,11 @@ async fn main() -> anyhow::Result<()> {
         std::env::set_var("LOCAL_AI_PROVIDER", k.to_string());
     }
 
+    // Plain mode: no colors/animations anywhere (scripts/CI).
+    if cli.plain {
+        std::env::set_var("NO_COLOR", "1");
+    }
+
     match (cli.command, cli.prompt) {
         (Some(cmd), _) => match cmd {
         Commands::Project(cmd) => commands::project::handle(cmd).await?,
@@ -78,6 +83,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Dataset(cmd) => commands::dataset::handle(cmd).await?,
         Commands::Metrics(cmd) => commands::metrics::handle(cmd).await?,
         Commands::Propose(cmd) => commands::propose::handle(cmd).await?,
+        Commands::Tui(cmd) => {
+            if cli.plain {
+                anyhow::bail!("`tui` needs an interactive terminal — drop --plain or use the plain subcommands");
+            }
+            commands::tui::handle(cmd).await?
+        }
         },
         // Bare `local-ai "fix the crash"` → agent loop in the current directory.
         // Same foreground, bounded, approval-gated engine as `agent run`.

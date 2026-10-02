@@ -21,3 +21,4 @@ pub mod mission;
 pub mod runner;
 pub mod plan;
 pub mod debug;
+pub mod tui;

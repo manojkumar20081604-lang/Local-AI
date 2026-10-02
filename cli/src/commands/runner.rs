@@ -18,16 +18,32 @@ use console::style;
 use crate::core::config::{AppConfig, ProviderKind};
 use crate::core::{
     agents as core_agents, debug as core_debug, edits as core_edits, fs as core_fs,
-    intelligence, plan as core_plan, provider, verifier,
+    intelligence, plan as core_plan, provider, ui_events, verifier,
 };
+
+// Output interception: every println!/eprintln! below reroutes to the TUI
+// event bus while `local-ai tui` owns the screen, and prints normally
+// otherwise — so `agent run` / `mission resume` behave exactly as before.
+macro_rules! println {
+    ($($arg:tt)*) => { crate::core::ui_events::tui_log(format!($($arg)*)) };
+}
+macro_rules! eprintln {
+    ($($arg:tt)*) => { crate::core::ui_events::tui_warn(format!($($arg)*)) };
+}
 
 pub const CODER_SYSTEM: &str = "You are Local AI, a precise coding agent. Return ONLY machine-readable edit blocks for the MINIMAL change, nothing else.\n\nFILE EDITING RULES:\n<CREATE_FILE>FILE: path CONTENT: ... </CREATE_FILE>\n<EDIT>FILE: path SEARCH: ... REPLACE: ... </EDIT>\nRules: relative paths that already exist in the project (never invent files), SEARCH must match the file byte-for-byte, smallest change that achieves the goal, no refactoring, no new dependencies.";
 
 /// Approval prompt with tiers: allow-once, allow-for-session, reject.
 ///
-/// `--yes` and a prior "allow for session" skip the prompt. Non-interactive
-/// terminals fail closed with a hint (re-run with `--yes`).
-pub fn confirm_or_yes(prompt: &str, yes: bool) -> Result<bool> {
+/// `--yes` and a prior "allow for session" skip the prompt. When the TUI
+/// owns the screen the prompt becomes a modal (with `detail` diff lines);
+/// a dead TUI fails closed. Non-interactive terminals fail closed with a
+/// hint (re-run with `--yes`).
+pub async fn confirm_or_yes(prompt: &str, yes: bool) -> Result<bool> {
+    confirm_with_detail(prompt, yes, Vec::new()).await
+}
+
+pub async fn confirm_with_detail(prompt: &str, yes: bool, detail: Vec<String>) -> Result<bool> {
     if yes {
         return Ok(true);
     }
@@ -35,23 +51,35 @@ pub fn confirm_or_yes(prompt: &str, yes: bool) -> Result<bool> {
     if crate::core::config::session_approved() {
         return Ok(true);
     }
-    let choices = ["Allow once", "Allow for session", "Reject"];
-    match dialoguer::Select::new()
-        .with_prompt(prompt)
-        .items(&choices)
-        .default(2)
-        .interact_opt()?
-    {
-        Some(0) => Ok(true),
-        Some(1) => {
-            crate::core::config::approve_session();
-            println!("  {} session approved — further prompts auto-approve", style("→").dim());
-            Ok(true)
+    if ui_events::has_approval_hook() {
+        use ui_events::ApprovalChoice;
+        match ui_events::request_approval(prompt.to_string(), detail).await {
+            Some(ApprovalChoice::Once) => Ok(true),
+            Some(ApprovalChoice::Session) => {
+                crate::core::config::approve_session();
+                Ok(true)
+            }
+            _ => Ok(false),
         }
-        _ => {
-            // Reject, Esc, or non-interactive (None).
-            eprintln!("{} rejected — re-run with --yes to approve non-interactively", style("!").yellow());
-            Ok(false)
+    } else {
+        let choices = ["Allow once", "Allow for session", "Reject"];
+        match dialoguer::Select::new()
+            .with_prompt(prompt)
+            .items(&choices)
+            .default(2)
+            .interact_opt()?
+        {
+            Some(0) => Ok(true),
+            Some(1) => {
+                crate::core::config::approve_session();
+                println!("  {} session approved — further prompts auto-approve", style("→").dim());
+                Ok(true)
+            }
+            _ => {
+                // Reject, Esc, or non-interactive (None).
+                eprintln!("{} rejected — re-run with --yes to approve non-interactively", style("!").yellow());
+                Ok(false)
+            }
         }
     }
 }
@@ -137,6 +165,7 @@ fn status_of(state: &RunState, step_id: &str) -> Option<String> {
 
 fn upsert_status(state: &mut RunState, entry: serde_json::Value) {
     let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+    let status = entry.get("status").and_then(|v| v.as_str()).unwrap_or("?").to_string();
     if let Some(slot) = state
         .step_statuses
         .iter_mut()
@@ -146,6 +175,7 @@ fn upsert_status(state: &mut RunState, entry: serde_json::Value) {
     } else {
         state.step_statuses.push(entry);
     }
+    ui_events::emit(ui_events::UiEvent::StepDone { id, status });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -161,7 +191,7 @@ pub async fn run_graph(
     orch: &mut core_agents::Orchestrator,
     trace_path: &std::path::Path,
     mission_id: &str,
-    on_step: Option<&dyn Fn(&str, &str)>,
+    on_step: Option<std::sync::Arc<dyn Fn(&str, &str) + Send + Sync>>,
 ) -> Result<RunOutcome> {
     let approve_dangerous = ctx.budget.approve_dangerous;
     let mut last_failures: Vec<core_debug::Failure> = Vec::new();
@@ -173,6 +203,18 @@ pub async fn run_graph(
     if let Some(msg) = crate::core::git::checkpoint_before_run(proj, mission_id) {
         println!("  {} checkpoint: {}", style("◈").dim(), style(msg).dim());
     }
+    ui_events::emit(ui_events::UiEvent::AgentStart {
+        goal: ctx.goal.clone(),
+        steps: graph.steps.len(),
+        max_steps: ctx.budget.max_steps,
+    });
+    ui_events::emit(ui_events::UiEvent::PlanCreated {
+        steps: graph
+            .steps
+            .iter()
+            .map(|s| (s.id.clone(), s.title.clone(), s.kind.to_string()))
+            .collect(),
+    });
 
     for step in &graph.steps {
         // Resume: skip steps finished by an earlier invocation (no budget consumed).
@@ -196,12 +238,23 @@ pub async fn run_graph(
         steps_this_run += 1;
         let header = format!("[{}] {} ({})", step.id, step.title, step.kind);
         println!("\n{} {}", style("▶").cyan().bold(), style(&header).bold());
+        ui_events::emit(ui_events::UiEvent::StepStart {
+            id: step.id.clone(),
+            title: step.title.clone(),
+            kind: step.kind.to_string(),
+        });
 
         match step.kind {
             core_plan::StepKind::Inspect => {
                 let total = files.len();
                 let dirs = files.iter().filter(|f| f.is_directory).count();
                 println!("  {} {} files ({} dirs)", style("✓ researcher").green(), total - dirs, dirs);
+                ui_events::emit(ui_events::UiEvent::ToolActivity {
+                    agent: "researcher".into(),
+                    action: "inspect".into(),
+                    detail: format!("{} files, {} dirs", total - dirs, dirs),
+                    status: "done".into(),
+                });
                 orch.record_tool_calls(1);
                 core_agents::append_trace(
                     trace_path,
@@ -224,7 +277,7 @@ pub async fn run_graph(
                         &core_agents::TraceEntry::new(mission_id, "researcher", "context", &step.id, "no files", "done"),
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "done"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "done");
                     }
                     continue;
@@ -248,6 +301,12 @@ pub async fn run_graph(
                     println!("  {} {} (unreadable — skipped)", style("!").yellow(), m);
                 }
                 let st = if missing.is_empty() { "done" } else { "partial" };
+                ui_events::emit(ui_events::UiEvent::ToolActivity {
+                    agent: "researcher".into(),
+                    action: "context".into(),
+                    detail: format!("loaded {}/{}: {}", loaded, step.files.len(), step.files.join(", ")),
+                    status: st.into(),
+                });
                 core_agents::append_trace(
                     trace_path,
                     &core_agents::TraceEntry::new(
@@ -271,7 +330,7 @@ pub async fn run_graph(
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "manual"}));
                     state.tests.push(serde_json::json!({"step": step.id, "result": "manual"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "manual");
                     }
                     continue;
@@ -285,12 +344,12 @@ pub async fn run_graph(
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "blocked"}));
                     state.tests.push(serde_json::json!({"step": step.id, "cmd": cmd, "result": "blocked"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "blocked");
                     }
                     continue;
                 }
-                if !confirm_or_yes(&format!("Run `{}`?", cmd), ctx.yes)? {
+                if !confirm_or_yes(&format!("Run `{}`?", cmd), ctx.yes).await? {
                     println!("  {} rejected by user", style("✗").red());
                     core_agents::append_trace(
                         trace_path,
@@ -298,7 +357,7 @@ pub async fn run_graph(
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "rejected"}));
                     state.tests.push(serde_json::json!({"step": step.id, "cmd": cmd, "result": "rejected"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "rejected");
                     }
                     continue;
@@ -314,6 +373,11 @@ pub async fn run_graph(
                 let combined = format!("{}\n{}", result.stdout, result.stderr);
                 if result.success {
                     println!("  {} exit {}", style("✓ PASS").green().bold(), result.exit_code.unwrap_or(0));
+                    ui_events::emit(ui_events::UiEvent::TestResult {
+                        step: step.id.clone(),
+                        passed: true,
+                        summary: format!("`{}` exit {}", cmd, result.exit_code.unwrap_or(0)),
+                    });
                     last_failures.clear();
                     core_agents::append_trace(
                         trace_path,
@@ -321,12 +385,27 @@ pub async fn run_graph(
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "pass"}));
                     state.tests.push(serde_json::json!({"step": step.id, "cmd": cmd, "result": "pass"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "pass");
                     }
                 } else {
                     println!("  {} exit {}", style("✗ FAIL").red().bold(), result.exit_code.unwrap_or(1));
                     last_failures = core_debug::parse_failures(&combined);
+                    ui_events::emit(ui_events::UiEvent::TestResult {
+                        step: step.id.clone(),
+                        passed: false,
+                        summary: format!(
+                            "`{}` exit {} — {} failure(s){}",
+                            cmd,
+                            result.exit_code.unwrap_or(1),
+                            last_failures.len(),
+                            last_failures.first().map(|f| format!(
+                                ": {}:{}",
+                                f.file.as_deref().unwrap_or("?"),
+                                f.line.map(|l| l.to_string()).unwrap_or_else(|| "?".into())
+                            )).unwrap_or_default()
+                        ),
+                    });
                     if !last_failures.is_empty() {
                         println!("  {} parsed {} failure(s):", style("→").dim(), last_failures.len());
                         for f in last_failures.iter().take(5) {
@@ -343,7 +422,7 @@ pub async fn run_graph(
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "fail"}));
                     state.tests.push(serde_json::json!({"step": step.id, "cmd": cmd, "result": "fail", "failures": last_failures}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "fail");
                     }
                 }
@@ -357,7 +436,7 @@ pub async fn run_graph(
                         &core_agents::TraceEntry::new(mission_id, "coder", "edit", &step.files.join(","), "no model — manual", "manual"),
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "manual"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "manual");
                     }
                     continue;
@@ -421,7 +500,9 @@ pub async fn run_graph(
                     provider::ChatMessage { role: "system".into(), content: CODER_SYSTEM.to_string() },
                     provider::ChatMessage { role: "user".into(), content: user_msg.clone() },
                 ];
-                let mut sink = |_chunk: &str| {};
+                let mut sink = |chunk: &str| {
+                    ui_events::emit(ui_events::UiEvent::ModelChunk { text: chunk.to_string() });
+                };
                 let answer = provider::stream_chat_unified(
                     &ctx.provider_kind,
                     &ctx.provider_url,
@@ -459,7 +540,7 @@ pub async fn run_graph(
                         &core_agents::TraceEntry::new(mission_id, "coder", "apply", &step.id, "no edit blocks", "manual"),
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "manual"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "manual");
                     }
                     continue;
@@ -479,12 +560,17 @@ pub async fn run_graph(
                         &core_agents::TraceEntry::new(mission_id, "coder", "apply", &step.id, "all refused", "refused"),
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "refused"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "refused");
                     }
                     continue;
                 }
                 print_diff_preview(proj, &ops);
+                ui_events::emit(ui_events::UiEvent::EditProposed {
+                    step: step.id.clone(),
+                    files: ops.iter().map(|o| o.path().to_string()).collect(),
+                    diff: core_edits::render_diff(proj, &ops),
+                });
                 // Reviewer pre-check on the payload (secrets/injection/traversal).
                 let sec = core_agents::security_review(&ops, &answer);
                 if !sec.passed {
@@ -506,19 +592,25 @@ pub async fn run_graph(
                         ),
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "blocked"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "blocked");
                     }
                     continue;
                 }
-                if !confirm_or_yes(&format!("Apply {} edit(s) for {}?", preview.applied.len(), step.id), ctx.yes)? {
+                if !confirm_with_detail(
+                    &format!("Apply {} edit(s) for {}?", preview.applied.len(), step.id),
+                    ctx.yes,
+                    core_edits::render_diff(proj, &ops),
+                )
+                .await?
+                {
                     println!("  {} rejected by user", style("✗").red());
                     core_agents::append_trace(
                         trace_path,
                         &core_agents::TraceEntry::new(mission_id, "coder", "apply", &step.id, "rejected", "rejected"),
                     )?;
                     upsert_status(state, serde_json::json!({"id": step.id, "status": "rejected"}));
-                    if let Some(hook) = on_step {
+                    if let Some(hook) = &on_step {
                         hook(&step.id, "rejected");
                     }
                     continue;
@@ -543,6 +635,10 @@ pub async fn run_graph(
                         "done",
                     ),
                 )?;
+                ui_events::emit(ui_events::UiEvent::EditApplied {
+                    step: step.id.clone(),
+                    applied: report.applied.clone(),
+                });
                 upsert_status(state, serde_json::json!({"id": step.id, "status": "done", "applied": report.applied.len()}));
             }
             core_plan::StepKind::Review | core_plan::StepKind::Manual => {
@@ -586,6 +682,17 @@ pub async fn run_graph(
                     eprintln!("  {} injection sinks (advisory): {}", style("→").dim(), sec.injection_risks.join(", "));
                 }
                 let st = if sec.passed { "pass" } else { "flagged" };
+                ui_events::emit(ui_events::UiEvent::Review {
+                    passed: sec.passed,
+                    summary: if sec.passed {
+                        "no secrets/traversal/invented files".to_string()
+                    } else {
+                        format!(
+                            "secrets={:?} invented={:?} traversal={:?}",
+                            sec.secrets_found, sec.invented_files, sec.traversal_attempts
+                        )
+                    },
+                });
                 core_agents::append_trace(
                     trace_path,
                     &core_agents::TraceEntry::new(
@@ -600,7 +707,7 @@ pub async fn run_graph(
                 upsert_status(state, serde_json::json!({"id": step.id, "status": st}));
             }
         }
-        if let Some(hook) = on_step {
+        if let Some(hook) = &on_step {
             let st = status_of(state, &step.id).unwrap_or_else(|| "done".to_string());
             hook(&step.id, &st);
         }
@@ -608,6 +715,15 @@ pub async fn run_graph(
 
     let tests_green = !state.tests.is_empty()
         && state.tests.iter().all(|t| t.get("result").and_then(|r| r.as_str()) == Some("pass"));
+    ui_events::emit(ui_events::UiEvent::AgentComplete {
+        green: tests_green,
+        summary: format!(
+            "{} steps this run, {} tool calls, {} file(s) applied",
+            steps_this_run,
+            orch.tool_calls,
+            state.applied.len()
+        ),
+    });
     Ok(RunOutcome {
         stop,
         steps_this_run,

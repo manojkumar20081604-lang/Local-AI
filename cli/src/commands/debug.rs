@@ -230,7 +230,7 @@ pub async fn handle(
         }
         if !args.yes {
             super::runner::print_diff_preview(&proj, &ops);
-            if !super::runner::confirm_or_yes(&format!("Apply {} edit(s)?", preview.applied.len()), false)? {
+            if !super::runner::confirm_or_yes(&format!("Apply {} edit(s)?", preview.applied.len()), false).await? {
                 println!("  {} rejected by user", style("✗").red());
                 transcript.push(serde_json::json!({"attempt": attempt, "exit": result.exit_code, "result": "rejected"}));
                 outcome = "rejected".to_string();
