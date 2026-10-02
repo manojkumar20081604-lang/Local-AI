@@ -304,6 +304,7 @@ async fn test_autodetect_prefers_ollama_when_both_up() {
     let cfg = AppConfig {
         mode: Default::default(),
         provider: local_ai::core::config::ProviderSection { active: ProviderKind::Auto, url: None },
+        model: None,
         providers: local_ai::core::config::ProvidersConfig {
             ollama: local_ai::core::config::ProviderConfig { url: ollama_server.url(), use_openai_compat: false },
             lmstudio: local_ai::core::config::ProviderConfig { url: lm_server.url_v1(), use_openai_compat: false },
@@ -329,6 +330,7 @@ async fn test_autodetect_falls_back_to_lmstudio_when_ollama_down() {
     let cfg = AppConfig {
         mode: Default::default(),
         provider: local_ai::core::config::ProviderSection { active: ProviderKind::Auto, url: None },
+        model: None,
         providers: local_ai::core::config::ProvidersConfig {
             ollama: local_ai::core::config::ProviderConfig { url: "http://127.0.0.1:59997".into(), use_openai_compat: false },
             lmstudio: local_ai::core::config::ProviderConfig { url: lm_server.url_v1(), use_openai_compat: false },
@@ -350,6 +352,7 @@ async fn test_autodetect_none_when_all_down() {
     let cfg = AppConfig {
         mode: Default::default(),
         provider: local_ai::core::config::ProviderSection { active: ProviderKind::Auto, url: None },
+        model: None,
         providers: local_ai::core::config::ProvidersConfig {
             ollama: local_ai::core::config::ProviderConfig { url: "http://127.0.0.1:59991".into(), use_openai_compat: false },
             lmstudio: local_ai::core::config::ProviderConfig { url: "http://127.0.0.1:59992/v1".into(), use_openai_compat: false },
@@ -378,6 +381,7 @@ async fn test_unified_list_models_auto_merges() {
     let cfg = AppConfig {
         mode: Default::default(),
         provider: local_ai::core::config::ProviderSection { active: ProviderKind::Auto, url: None },
+        model: None,
         providers: local_ai::core::config::ProvidersConfig {
             ollama: local_ai::core::config::ProviderConfig { url: ollama_server.url(), use_openai_compat: false },
             lmstudio: local_ai::core::config::ProviderConfig { url: lm_server.url_v1(), use_openai_compat: false },
@@ -405,6 +409,7 @@ async fn test_unified_stream_chat_auto() {
     let cfg = AppConfig {
         mode: Default::default(),
         provider: local_ai::core::config::ProviderSection { active: ProviderKind::Auto, url: None },
+        model: None,
         providers: local_ai::core::config::ProvidersConfig {
             ollama: local_ai::core::config::ProviderConfig { url: "http://127.0.0.1:59991".into(), use_openai_compat: false },
             lmstudio: local_ai::core::config::ProviderConfig { url: server.url_v1(), use_openai_compat: false },

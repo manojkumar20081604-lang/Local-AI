@@ -96,14 +96,9 @@ pub async fn handle(
     }
 
     // Model resolution — failure here is NON-fatal: diagnosis still works.
-    let model: Option<String> = if let Some(m) = args.model.clone() {
-        Some(m)
-    } else {
-        match provider::list_models_unified(&provider_kind, &provider_url, &cfg).await {
-            Ok(v) if !v.is_empty() => Some(v[0].id.clone()),
-            _ => None,
-        }
-    };
+    // Order: --model flag > saved `model` > first available.
+    let model: Option<String> =
+        provider::resolve_model_id(args.model.clone(), &provider_kind, &provider_url, &cfg).await;
     if let Some(m) = &model {
         println!("{} model: {} (provider: {})", style("debug:").dim(), m, provider_kind);
     } else {

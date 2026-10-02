@@ -19,6 +19,7 @@ pub mod intelligence;
 pub mod projects;
 pub mod provider;
 pub mod router;
+pub mod setup;
 pub mod symbols;
 pub mod tools;
 pub mod ui_events;

@@ -25,6 +25,12 @@ pub enum ModelsCommands {
     List,
     /// Check connectivity for all providers
     Status,
+    /// Save the default model (used when --model is omitted)
+    Select {
+        /// Model id (omit for interactive picker over reachable providers)
+        #[arg(long)]
+        id: Option<String>,
+    },
 }
 
 fn resolve_args_provider(local_provider: Option<String>, global_provider: Option<ProviderKind>) -> Option<ProviderKind> {
@@ -106,7 +112,43 @@ pub async fn handle(
                 println!("{}", serde_json::to_string_pretty(&models).unwrap_or_default());
             }
         }
+        ModelsCommands::Select { id } => {
+            handle_select(id, &cfg).await?;
+        }
     }
+    Ok(())
+}
+
+async fn handle_select(id: Option<String>, cfg: &AppConfig) -> Result<()> {
+    use crate::core::config::save_config;
+    let models = provider::list_models_unified(&ProviderKind::Auto, "", cfg).await.unwrap_or_default();
+    if models.is_empty() {
+        anyhow::bail!("No models reachable — start Ollama (`ollama serve`) or LM Studio first");
+    }
+    let chosen = match id {
+        Some(want) => {
+            if !models.iter().any(|m| m.id == want) {
+                let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+                anyhow::bail!("Model '{}' not available (reachable: {})", want, ids.join(", "));
+            }
+            want
+        }
+        None => {
+            if !console::user_attended() {
+                let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+                anyhow::bail!("No interactive terminal — pass `--id <model>` (reachable: {})", ids.join(", "));
+            }
+            let ids: Vec<String> = models.iter().map(|m| format!("{}  ({})", m.id, m.provider)).collect();
+            match dialoguer::Select::new().with_prompt("Model").items(&ids).default(0).interact_opt()? {
+                Some(i) => models[i].id.clone(),
+                None => anyhow::bail!("Selection cancelled"),
+            }
+        }
+    };
+    let mut updated = cfg.clone();
+    updated.model = Some(chosen.clone());
+    save_config(&updated)?;
+    println!("{} default model → {}", style("✓").green(), style(chosen).cyan());
     Ok(())
 }
 

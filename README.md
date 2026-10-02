@@ -27,6 +27,10 @@ Local AI helps developers understand, analyze, and modify projects using locally
 # Install once — `local-ai` then works from any directory
 ./install.sh   # → ~/.local/bin/local-ai (or: ./install.sh --system)
 
+# First launch walks through provider → model setup (saved globally).
+# Every later launch just prints ✓✓✓ and starts:
+local-ai
+
 # Attach a project and chat (auto-detects LM Studio or Ollama)
 local-ai project attach . --name MyApp
 local-ai models list                     # auto: Ollama -> LM Studio -> llama.cpp

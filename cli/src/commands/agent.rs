@@ -237,14 +237,9 @@ async fn handle_run(
     crate::core::config::require_build_mode("agent run")?;
 
     // --- Model resolution (non-fatal: offline → manual coder, tester still runs) ---
-    let model: Option<String> = if let Some(m) = model_override {
-        Some(m)
-    } else {
-        match provider::list_models_unified(&provider_kind, &provider_url, &cfg).await {
-            Ok(v) if !v.is_empty() => Some(v[0].id.clone()),
-            _ => None,
-        }
-    };
+    // Order: --model flag > saved `model` > first available.
+    let model: Option<String> =
+        provider::resolve_model_id(model_override, &provider_kind, &provider_url, &cfg).await;
     if let Some(m) = &model {
         println!("{} model: {} (provider: {})", style("agent:").dim(), m, provider_kind);
     } else {

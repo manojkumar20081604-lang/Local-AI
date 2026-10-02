@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use crate::commands::{project, models, chat, files, exec, analyze, finetune, doctor, config, graph, index, git, memory, mission, browse, plan, debug, agent, bench, dataset, metrics, propose, tui};
+use crate::commands::{project, models, chat, files, exec, analyze, finetune, doctor, config, graph, index, git, memory, mission, browse, plan, debug, agent, bench, dataset, metrics, propose, tui, init, provider};
 
 #[derive(Parser)]
 #[command(name = "local-ai", version, about = "Local AI CLI — local model workspace + finetuning (all OS)")]
@@ -91,4 +91,8 @@ pub enum Commands {
     Propose(propose::ProposeArgs),
     /// Fullscreen anime command center (needs an interactive terminal)
     Tui(tui::TuiArgs),
+    /// First-run setup: provider → connection → model (also on `local-ai` first launch)
+    Init(init::InitArgs),
+    /// List, switch, and test model providers
+    Provider(provider::ProviderArgs),
 }

@@ -140,6 +140,10 @@ pub struct AppConfig {
     pub mode: AppMode,
     #[serde(default)]
     pub provider: ProviderSection,
+    /// Saved default model id (set by `init`, `models select`, `/model <id>`).
+    /// Explicit `--model` flags always win over this.
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub providers: ProvidersConfig,
     #[serde(default)]
@@ -190,6 +194,7 @@ pub fn default_config() -> AppConfig {
     AppConfig {
         mode: AppMode::Build,
         provider: ProviderSection { active: ProviderKind::Auto, url: None },
+        model: None,
         providers: ProvidersConfig {
             lmstudio: ProviderConfig { url: "http://localhost:1234/v1".to_string(), use_openai_compat: false },
             ollama: ProviderConfig { url: "http://localhost:11434".to_string(), use_openai_compat: false },

@@ -109,16 +109,25 @@ local-ai exec --project MyApp -- "npm test"
 local-ai exec -- "cargo build"  # uses current dir as project
 local-ai exec --project MyApp -- "ls -la"
 
+# First run — provider → connection → model (saved globally, never in projects)
+local-ai init                                   # interactive wizard (also runs on first bare launch)
+local-ai init --provider ollama --model qwen3-coder  # non-interactive (scripts)
+local-ai provider list                          # endpoints + reachability (* = active)
+local-ai provider select --name ollama          # switch provider (re-checks saved model)
+local-ai provider test --name lmstudio          # connectivity + model list
+local-ai models select --id qwen2.5:1.5b        # pin the default model (flags still win)
+local-ai config set model qwen2.5:1.5b          # same thing, script-friendly
+local-ai doctor                                 # 9 checks: install/PATH/config/provider/model/project/git/terminal/tools
+
 # Models — universal provider (LM Studio + Ollama + llama.cpp + any OpenAI-compatible)
 local-ai models list                              # auto-detect: tries Ollama :11434 -> LM Studio :1234/v1 -> llama.cpp :8080
 local-ai models list --provider ollama            # force Ollama native (GET /api/tags)
 local-ai models list --provider lmstudio --url http://localhost:1234/v1
-local-ai doctor                                   # health_check all providers + embeddings + grounding config
 local-ai config show                              # dump merged config + autodetect
 local-ai config set provider.ollama.url http://localhost:11434
 
 # Chat (streaming, project-aware, grounded, saves to projects.json)
-local-ai                                        # bare: REPL in current dir (same as below)
+local-ai                                        # bare: first-run setup (once) → summary → TUI
 local-ai "fix the PDF crash"                    # bare: agent loop in current dir (approval-gated)
 local-ai tui --project MyApp                    # fullscreen anime command center (panels, diffs, approvals)
 local-ai tui --no-animation --ascii --theme matrix  # calm/portable mode; custom ~/.config/local-ai/theme.json

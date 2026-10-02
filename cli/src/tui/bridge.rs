@@ -56,14 +56,8 @@ pub async fn run_goal(
         ),
     )?;
 
-    let model: Option<String> = if let Some(m) = model_override {
-        Some(m)
-    } else {
-        match provider::list_models_unified(provider_kind, provider_url, &cfg).await {
-            Ok(v) if !v.is_empty() => Some(v[0].id.clone()),
-            _ => None,
-        }
-    };
+    let model: Option<String> =
+        provider::resolve_model_id(model_override, provider_kind, provider_url, &cfg).await;
 
     let mut orch = core_agents::Orchestrator::new(
         mission_id.clone(),
@@ -138,14 +132,8 @@ pub async fn answer_once(
         context = format!("MEMORY:\n{}\n\n{}", merged, context);
     }
 
-    let model: Option<String> = if let Some(m) = model_override {
-        Some(m)
-    } else {
-        match provider::list_models_unified(provider_kind, provider_url, &cfg).await {
-            Ok(v) if !v.is_empty() => Some(v[0].id.clone()),
-            _ => None,
-        }
-    };
+    let model: Option<String> =
+        provider::resolve_model_id(model_override, provider_kind, provider_url, &cfg).await;
     let Some(model_id) = model else {
         anyhow::bail!("No model reachable — start Ollama or LM Studio first")
     };

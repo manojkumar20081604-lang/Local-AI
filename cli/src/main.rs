@@ -83,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Dataset(cmd) => commands::dataset::handle(cmd).await?,
         Commands::Metrics(cmd) => commands::metrics::handle(cmd).await?,
         Commands::Propose(cmd) => commands::propose::handle(cmd).await?,
+        Commands::Init(cmd) => commands::init::handle(cmd).await?,
+        Commands::Provider(cmd) => commands::provider::handle(cmd).await?,
         Commands::Tui(cmd) => {
             if cli.plain {
                 anyhow::bail!("`tui` needs an interactive terminal — drop --plain or use the plain subcommands");
@@ -116,33 +118,9 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?
         }
-        // Bare `local-ai` → interactive chat REPL in the current directory.
+        // Bare `local-ai` → first-run setup (once) → summary → TUI.
         (None, None) => {
-            eprintln!("No command given — opening chat in current directory (type /exit to quit)");
-            commands::chat::handle(
-                commands::chat::ChatArgs {
-                    message: String::new(),
-                    model: None,
-                    project: None,
-                    no_context: false,
-                    no_save: false,
-                    system: None,
-                    show_context: false,
-                    grounding: None,
-                    provider: None,
-                    url: None,
-                    show_verifier: false,
-                    no_verify: false,
-                    verify_only: false,
-                    tools: false,
-                    route: false,
-                },
-                cli_provider_kind,
-                cli.url.clone(),
-                cli.lm_studio_url.clone(),
-                cli.mcp.clone(),
-            )
-            .await?
+            commands::init::launch().await?
         }
     }
 

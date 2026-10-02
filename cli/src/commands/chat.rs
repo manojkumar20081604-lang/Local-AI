@@ -114,12 +114,17 @@ async fn resolve_model(
     cfg: &crate::core::config::AppConfig,
 ) -> Result<String> {
     if let Some(m) = requested { return Ok(m); }
-    // Try unified list
+    // Try unified list; prefer the saved `model` when it is available.
     let url = if provider_url.is_empty() { "" } else { provider_url };
     let kind = if provider_url.is_empty() && provider_kind == &ProviderKind::Auto { &ProviderKind::Auto } else { provider_kind };
     match provider::list_models_unified(kind, url, cfg).await {
-        Ok(models) if !models.is_empty() => Ok(models[0].id.clone()),
-        _ => Ok("qwen/qwen3.5-9b".to_string()),
+        Ok(models) if !models.is_empty() => {
+            let ids = models.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+            Ok(provider::pick_model(None, cfg.model.as_deref(), &ids)
+                .unwrap_or(models[0].id.clone()))
+        }
+        // Offline: trust the saved model (it was valid at save time).
+        _ => Ok(cfg.model.clone().unwrap_or_else(|| "qwen/qwen3.5-9b".to_string())),
     }
 }
 

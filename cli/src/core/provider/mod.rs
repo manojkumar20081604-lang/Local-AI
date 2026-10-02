@@ -128,6 +128,49 @@ fn get_default_url(kind: &ProviderKind, cfg: &AppConfig) -> String {
 
 // Unified helpers used by chat/models commands
 
+/// Pure model pick: explicit `--model` > saved `model` (when listed) >
+/// first available. Offline-safe; listing happens in the wrapper below.
+pub fn pick_model(
+    explicit: Option<&str>,
+    saved: Option<&str>,
+    available: &[String],
+) -> Option<String> {
+    if let Some(m) = explicit {
+        if !m.trim().is_empty() {
+            return Some(m.to_string());
+        }
+    }
+    if let Some(s) = saved {
+        if !s.trim().is_empty() && available.iter().any(|m| m == s) {
+            return Some(s.to_string());
+        }
+    }
+    available.first().cloned()
+}
+
+/// Resolve the model id for a run. Explicit flags never touch the network;
+/// otherwise lists once and falls back to first available (a stale saved
+/// model degrades gracefully instead of failing the run).
+pub async fn resolve_model_id(
+    explicit: Option<String>,
+    kind: &ProviderKind,
+    base_url: &str,
+    cfg: &AppConfig,
+) -> Option<String> {
+    if let Some(m) = explicit {
+        if !m.trim().is_empty() {
+            return Some(m);
+        }
+    }
+    let available = list_models_unified(kind, base_url, cfg)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| m.id)
+        .collect::<Vec<_>>();
+    pick_model(None, cfg.model.as_deref(), &available)
+}
+
 pub async fn list_models_unified(
     kind: &ProviderKind,
     base_url: &str,
