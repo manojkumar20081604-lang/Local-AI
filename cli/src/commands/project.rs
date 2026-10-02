@@ -45,7 +45,7 @@ pub async fn handle(args: ProjectArgs) -> Result<()> {
                 println!("No projects. Use `local-ai project attach .` or `local-ai project create MyProj --path ./folder`");
                 return Ok(());
             }
-            println!("{:<36} {:<20} {:<40} {}", "ID", "NAME", "FOLDER", "UPDATED");
+            println!("{:<36} {:<20} {:<40} UPDATED", "ID", "NAME", "FOLDER");
             for p in projects {
                 println!(
                     "{:<36} {:<20} {:<40} {}",

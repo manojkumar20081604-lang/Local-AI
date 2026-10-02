@@ -4,9 +4,9 @@
 //! Reference: plan.md §5 tests/hallucination.rs
 
 use local_ai::core::fs::ProjectFile;
-use local_ai::core::projects::{Project, ChatMessage};
+use local_ai::core::projects::Project;
 use local_ai::core::verifier::{
-    extract_file_mentions, extract_symbols, is_inventory_query, is_project_name_query,
+    extract_file_mentions, is_inventory_query, is_project_name_query,
     verify_response, verify_response_hybrid, inject_citations, deterministic_inventory_response,
 };
 use std::fs;

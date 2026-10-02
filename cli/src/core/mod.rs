@@ -1,10 +1,24 @@
+pub mod agents;
+pub mod bench;
+pub mod browse;
 pub mod config;
+pub mod dataset;
+pub mod debug;
+pub mod edits;
 pub mod embeddings;
 pub mod fs;
+pub mod git;
 pub mod index;
+pub mod mcp;
+pub mod memory;
+pub mod metrics;
+pub mod missions;
+pub mod plan;
 pub mod intelligence;
 pub mod projects;
 pub mod provider;
+pub mod router;
+pub mod symbols;
 pub mod tools;
 pub mod verifier;
 

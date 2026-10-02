@@ -1,0 +1,5 @@
+{"id": "coding-explain-auth", "suite": "coding", "kind": "contains_any", "user": "Which file most likely holds the authentication logic? Reply with just the file path.", "expect": ["auth"]}
+{"id": "coding-edit-anchor", "suite": "coding", "kind": "contains_all", "user": "Propose a minimal <EDIT> block fixing the login function. Include FILE:, SEARCH: and REPLACE: markers.", "expect": ["<EDIT>", "FILE:", "SEARCH:", "REPLACE:"]}
+{"id": "coding-no-hallucination", "suite": "coding", "kind": "verifier_clean", "user": "List the real source files involved in login and cite each as [path]. Do not invent files.", "expect": []}
+{"id": "reasoning-arch", "suite": "reasoning", "kind": "contains_any", "user": "Describe the project architecture in 3 bullets: entry point, core modules, data flow.", "expect": ["src/", "main"]}
+{"id": "reasoning-debug-plan", "suite": "reasoning", "kind": "contains_any", "user": "Tests fail on login. Outline a 3-step debug plan: reproduce, isolate, fix.", "expect": ["reproduce", "test", "fix"]}

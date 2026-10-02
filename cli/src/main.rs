@@ -1,10 +1,7 @@
-mod cli;
-mod commands;
-mod core;
-
 use clap::Parser;
-use cli::{Cli, Commands};
-use core::config::{ProviderKind, load_config};
+use local_ai::cli::{Cli, Commands};
+use local_ai::commands;
+use local_ai::core::config::{ProviderKind, load_config};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -59,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Project(cmd) => commands::project::handle(cmd).await?,
         Commands::Models(cmd) => commands::models::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone()).await?,
-        Commands::Chat(cmd) => commands::chat::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone()).await?,
+        Commands::Chat(cmd) => commands::chat::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone(), cli.mcp.clone()).await?,
         Commands::Files(cmd) => commands::files::handle(cmd).await?,
         Commands::Exec(cmd) => commands::exec::handle(cmd).await?,
         Commands::Analyze(cmd) => commands::analyze::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone()).await?,
@@ -67,10 +64,23 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor(cmd) => commands::doctor::handle(cmd).await?,
         Commands::Config(cmd) => commands::config::handle(cmd).await?,
         Commands::Index(cmd) => commands::index::handle(cmd).await?,
+        Commands::Graph(cmd) => commands::graph::handle(cmd).await?,
+        Commands::Memory(cmd) => commands::memory::handle(cmd).await?,
+        Commands::Git(cmd) => commands::git::handle(cmd).await?,
+        Commands::Plan(cmd) => commands::plan::handle_plan(cmd).await?,
+        Commands::ExecPlan(cmd) => commands::plan::handle_exec_plan(cmd).await?,
+        Commands::Debug(cmd) => commands::debug::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone()).await?,
+        Commands::Agent(cmd) => commands::agent::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone()).await?,
+        Commands::Mission(cmd) => commands::mission::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone()).await?,
+        Commands::Browse(cmd) => commands::browse::handle(cmd).await?,
+        Commands::Bench(cmd) => commands::bench::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone()).await?,
+        Commands::Dataset(cmd) => commands::dataset::handle(cmd).await?,
+        Commands::Metrics(cmd) => commands::metrics::handle(cmd).await?,
+        Commands::Propose(cmd) => commands::propose::handle(cmd).await?,
     }
 
     // Avoid unused warning for load_config import
-    let _ = load_config as fn() -> anyhow::Result<core::config::AppConfig>;
+    let _ = load_config as fn() -> anyhow::Result<local_ai::core::config::AppConfig>;
 
     Ok(())
 }

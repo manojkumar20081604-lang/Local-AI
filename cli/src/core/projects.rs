@@ -29,14 +29,9 @@ pub fn projects_file() -> Result<PathBuf> {
         .or_else(dirs::config_dir)
         .context("Could not determine data directory")?;
 
-    let app_dir = if cfg!(target_os = "macos") {
-        base.join("com.localai.app")
-    } else if cfg!(target_os = "windows") {
-        base.join("com.localai.app")
-    } else {
-        // Linux: match Tauri's app_data_dir which is $XDG_DATA_HOME/com.localai.app or ~/.local/share/com.localai.app
-        base.join("com.localai.app")
-    };
+    // Linux: match Tauri's app_data_dir which is $XDG_DATA_HOME/com.localai.app or ~/.local/share/com.localai.app
+    // (macOS/Windows resolve to the same app dir via dirs).
+    let app_dir = base.join("com.localai.app");
 
     fs::create_dir_all(&app_dir).context("Failed to create app data directory")?;
     Ok(app_dir.join("projects.json"))

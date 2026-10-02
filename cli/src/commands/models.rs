@@ -119,7 +119,7 @@ fn print_models(models: Vec<provider::AIModel>, json: bool) {
         println!("No models found. Load a model in LM Studio (port 1234) or Ollama (ollama pull llama3.1 && ollama serve).");
         return;
     }
-    println!("{:<45} {:<12} {:<15} {}", "ID", "PROVIDER", "OBJECT", "OWNED_BY");
+    println!("{:<45} {:<12} {:<15} OWNED_BY", "ID", "PROVIDER", "OBJECT");
     for m in models {
         println!("{:<45} {:<12} {:<15} {}", style(&m.id).cyan(), m.provider, m.object, m.owned_by);
     }

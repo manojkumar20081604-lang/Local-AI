@@ -1,10 +1,10 @@
 //! Phase 5 - Provider integration tests
 //! Validates: mock servers for GET /v1/models (LM Studio) and GET /api/tags (Ollama)
-//! + streaming data: SSE vs NDJSON {"message":{"content":...}}
+//! and streaming data: SSE vs NDJSON {"message":{"content":...}}
 //! Reference: plan.md §5 tests/providers.rs
 
 use local_ai::core::config::{AppConfig, ProviderKind};
-use local_ai::core::provider::{get_provider, Provider, autodetect, list_models_unified, stream_chat_unified, ChatMessage};
+use local_ai::core::provider::{get_provider, autodetect, list_models_unified, stream_chat_unified, ChatMessage};
 use std::collections::HashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -312,6 +312,7 @@ async fn test_autodetect_prefers_ollama_when_both_up() {
         },
         grounding: Default::default(),
         embeddings: Default::default(),
+        router: Default::default(),
     };
     let (kind, url, ok) = autodetect(&cfg).await;
     assert!(ok, "autodetect should find a provider");
@@ -336,6 +337,7 @@ async fn test_autodetect_falls_back_to_lmstudio_when_ollama_down() {
         },
         grounding: Default::default(),
         embeddings: Default::default(),
+        router: Default::default(),
     };
     let (kind, url, ok) = autodetect(&cfg).await;
     assert!(ok);
@@ -356,6 +358,7 @@ async fn test_autodetect_none_when_all_down() {
         },
         grounding: Default::default(),
         embeddings: Default::default(),
+        router: Default::default(),
     };
     let (_kind, _url, ok) = autodetect(&cfg).await;
     assert!(!ok, "should be not ok when all down");
@@ -383,6 +386,7 @@ async fn test_unified_list_models_auto_merges() {
         },
         grounding: Default::default(),
         embeddings: Default::default(),
+        router: Default::default(),
     };
     let models = list_models_unified(&ProviderKind::Auto, "", &cfg).await.unwrap();
     // Should have at least 4 unique: 2 from ollama (llama3.1, qwen2.5) + 2 from lmstudio (qwen3.5, mistral)
@@ -409,6 +413,7 @@ async fn test_unified_stream_chat_auto() {
         },
         grounding: Default::default(),
         embeddings: Default::default(),
+        router: Default::default(),
     };
     let msgs = vec![ChatMessage { role: "user".into(), content: "hello".into() }];
     let mut out = String::new();

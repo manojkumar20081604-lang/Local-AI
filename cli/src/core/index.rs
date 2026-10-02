@@ -36,6 +36,12 @@ pub struct ProjectIndex {
     pub files: Vec<FileEntry>,
     pub embedder_name: String,
     pub embedder_dim: usize,
+    /// RAG 2.0 (Phase 3.2): per-file symbols. `default` keeps old `index.json` readable.
+    #[serde(default)]
+    pub symbols: Vec<super::symbols::FileSymbols>,
+    /// RAG 2.0: resolved import edges `from → to`.
+    #[serde(default)]
+    pub imports: Vec<super::symbols::ImportEdge>,
 }
 
 fn cache_dir(project: &Project) -> Result<PathBuf> {
@@ -102,6 +108,16 @@ fn hash_content(content: &str) -> String {
 }
 
 pub fn build_index(project: &Project, embedder: Arc<dyn Embedder>) -> Result<ProjectIndex> {
+    build_index_with_symbols(project, embedder, true)
+}
+
+/// Rebuild with optional symbol extraction (`--symbols` / `--no-symbols`).
+/// Symbols are pure-Rust (no binary deps) and always cheap (<5ms/kloc).
+pub fn build_index_with_symbols(
+    project: &Project,
+    embedder: Arc<dyn Embedder>,
+    with_symbols: bool,
+) -> Result<ProjectIndex> {
     let folder = project.folder_path.as_ref().context("Project has no folder")?;
     let root = PathBuf::from(folder);
 
@@ -167,7 +183,7 @@ pub fn build_index(project: &Project, embedder: Arc<dyn Embedder>) -> Result<Pro
     // Batch embed 16 at a time
     let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(all_texts.len());
     for batch in all_texts.chunks(16) {
-        let batch_strs: Vec<String> = batch.iter().cloned().collect();
+        let batch_strs: Vec<String> = batch.to_vec();
         let embeds = embedder.embed(&batch_strs).context("Embed batch failed")?;
         all_embeddings.extend(embeds);
     }
@@ -200,13 +216,28 @@ pub fn build_index(project: &Project, embedder: Arc<dyn Embedder>) -> Result<Pro
         });
     }
 
+    // RAG 2.0 symbols (Phase 3.2): parse from the already-loaded contents.
+    // Cheap and offline; skipped only with `--no-symbols`.
+    let (symbols, imports) = if with_symbols {
+        let listing = core_fs::list_project_files(project).unwrap_or_default();
+        let graph = super::symbols::build_graph(&listing, |p| {
+            // Reuse in-memory contents when available via a fresh read (cheap for code files).
+            core_fs::read_project_file(project, p).ok()
+        });
+        (graph.files, graph.edges)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
     let idx = ProjectIndex {
-        version: 2,
+        version: 3,
         project_id: project.id.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         files: entries,
         embedder_name: embedder.name().to_string(),
         embedder_dim: embedder.dim(),
+        symbols,
+        imports,
     };
     save_index(project, &idx)?;
     println!("✓ Indexed {} files → {}", idx.files.len(), index_path(project)?.display());
@@ -288,7 +319,7 @@ pub fn index_status(project: &Project) -> Result<String> {
     let age = chrono::DateTime::parse_from_rfc3339(&idx.created_at).map(|d| chrono::Utc::now().signed_duration_since(d.with_timezone(&chrono::Utc)).num_minutes()).unwrap_or(0);
     let stale = needs_rebuild(project, &idx);
     Ok(format!(
-        "Index: {} files, embedder={} ({}dim), created {} ({}m ago), stale={}, path={}",
-        idx.files.len(), idx.embedder_name, idx.embedder_dim, idx.created_at, age, stale, path.display()
+        "Index: {} files, embedder={} ({}dim), symbols={} files/{} edges, created {} ({}m ago), stale={}, path={}",
+        idx.files.len(), idx.embedder_name, idx.embedder_dim, idx.symbols.len(), idx.imports.len(), idx.created_at, age, stale, path.display()
     ))
 }

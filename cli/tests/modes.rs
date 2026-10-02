@@ -54,8 +54,7 @@ fn test_is_plan_mode_via_env() {
 
 #[test]
 fn test_mode_config_serialization() {
-    let mut cfg = AppConfig::default();
-    cfg.mode = AppMode::Plan;
+    let mut cfg = AppConfig { mode: AppMode::Plan, ..Default::default() };
     let toml = toml::to_string(&cfg).unwrap();
     assert!(toml.contains("plan"), "toml should contain plan, got {}", toml);
     let parsed: AppConfig = toml::from_str(&toml).unwrap();
@@ -164,12 +163,12 @@ fn test_exec_blocked_in_plan_mode_for_write() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // intentional: serializes process-global env mutation across parallel tests
 async fn test_web_fetch_browser_access() {
     let _guard = ENV_LOCK.lock().unwrap();
     use local_ai::core::tools::{ToolCall, execute_tool};
     use local_ai::core::projects::Project;
     use serde_json::json;
-    use std::fs;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Mock HTTP server for browser fetch (no external network needed)

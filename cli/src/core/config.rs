@@ -3,18 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
+    #[default]
     Auto,
     LmStudio,
     Ollama,
     LlamaCpp,
     Generic,
-}
-
-impl Default for ProviderKind {
-    fn default() -> Self { Self::Auto }
 }
 
 impl std::str::FromStr for ProviderKind {
@@ -44,15 +41,11 @@ impl std::fmt::Display for ProviderKind {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ProviderConfig {
     pub url: String,
     #[serde(default)]
     pub use_openai_compat: bool,
-}
-
-impl Default for ProviderConfig {
-    fn default() -> Self { Self { url: String::new(), use_openai_compat: false } }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -89,15 +82,12 @@ pub struct EmbeddingsConfig {
 fn default_embeddings_provider() -> String { "tfidf".to_string() } // fastembed requires 120MB download, default to offline tfidf
 fn default_embeddings_model() -> String { "BAAI/bge-small-en-v1.5".to_string() }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AppMode {
     Plan,
+    #[default]
     Build,
-}
-
-impl Default for AppMode {
-    fn default() -> Self { Self::Build }
 }
 
 impl std::str::FromStr for AppMode {
@@ -122,6 +112,29 @@ impl std::fmt::Display for AppMode {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RouterConfig {
+    #[serde(default)]
+    pub simple: Option<String>,
+    #[serde(default)]
+    pub coding: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub embed: Option<String>,
+}
+
+impl RouterConfig {
+    pub fn override_for(&self, class: crate::core::router::ModelClass) -> Option<&str> {
+        match class {
+            crate::core::router::ModelClass::Simple => self.simple.as_deref(),
+            crate::core::router::ModelClass::Coding => self.coding.as_deref(),
+            crate::core::router::ModelClass::Reason => self.reason.as_deref(),
+            crate::core::router::ModelClass::Embed => self.embed.as_deref(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub mode: AppMode,
@@ -133,6 +146,8 @@ pub struct AppConfig {
     pub grounding: GroundingConfig,
     #[serde(default)]
     pub embeddings: EmbeddingsConfig,
+    #[serde(default)]
+    pub router: RouterConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -145,14 +160,7 @@ pub struct ProviderSection {
 
 pub fn config_path() -> Result<PathBuf> {
     let base = dirs::config_dir().context("Could not determine config dir")?;
-    let dir = if cfg!(target_os = "macos") {
-        base.join("local-ai")
-    } else if cfg!(target_os = "windows") {
-        base.join("local-ai")
-    } else {
-        base.join("local-ai")
-    };
-    Ok(dir.join("config.toml"))
+    Ok(base.join("local-ai").join("config.toml"))
 }
 
 pub fn load_config() -> Result<AppConfig> {
@@ -190,6 +198,7 @@ pub fn default_config() -> AppConfig {
         },
         grounding: GroundingConfig { mode: "balanced".to_string(), require_citations: true },
         embeddings: EmbeddingsConfig { provider: "tfidf".to_string(), model: "BAAI/bge-small-en-v1.5".to_string() },
+        router: RouterConfig::default(),
     }
 }
 

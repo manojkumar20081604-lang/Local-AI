@@ -238,7 +238,7 @@ pub async fn execute_tool(project: &Project, tool_call: &ToolCall) -> Result<Val
 /// Sync wrapper for tests and non-async callers (blocks on current runtime)
 pub fn execute_tool_sync(project: &Project, tool_call: &ToolCall) -> Result<Value> {
     // For sync callers outside tokio, create a runtime; for inside tokio, use block_in_place if possible
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+    if let Ok(_handle) = tokio::runtime::Handle::try_current() {
         // Inside tokio — we are already in runtime, use the handle to block? Instead use futures::executor::block_on via handle? Simpler: use tokio::task::block_in_place if available
         // Fallback: spawn blocking task and block_on
         // Use handle.block_on(async) via spawn? But we are inside runtime, can't block_on directly.
@@ -259,7 +259,7 @@ pub fn execute_tool_sync(project: &Project, tool_call: &ToolCall) -> Result<Valu
 }
 
 /// Parse tool calls from a response that may contain JSON tool_calls (for testing)
-pub fn parse_tool_calls_from_text(text: &str) -> Vec<ToolCall> {
+pub fn parse_tool_calls_from_text(_text: &str) -> Vec<ToolCall> {
     // Try to find <tool_call> blocks or JSON tool calls embedded
     // For now, just look for function call patterns
     Vec::new()

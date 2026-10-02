@@ -73,7 +73,7 @@ impl Embedder for FastEmbedEmbedder {
     fn dim(&self) -> usize { self.dim }
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut guard = self.model.lock().map_err(|_| anyhow::anyhow!("FastEmbed lock poisoned"))?;
-        let embeddings = guard.embed(texts.to_vec(), None).context("FastEmbed embed failed")?;
+        let embeddings = guard.embed(texts, None).context("FastEmbed embed failed")?;
         Ok(embeddings)
     }
 }
@@ -161,7 +161,7 @@ impl Embedder for OllamaEmbedder {
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         // Sync wrapper for trait — block_on async
         let rt = tokio::runtime::Handle::try_current();
-        if let Ok(handle) = rt {
+        if let Ok(_handle) = rt {
             // If we are inside tokio, we cannot block_on directly (would panic). Use block_in_place? Instead spawn and block.
             // For simplicity, use futures::executor::block_on via handle.block_on if not already in runtime? But we are in runtime, so we need to use tokio::task::block_in_place? Safer: just run async via handle.
             // Use handle.block_on only if we are not in async context? This is messy. Instead require async embed for Ollama.
@@ -247,7 +247,7 @@ pub fn get_embedder(cfg: &crate::core::config::AppConfig) -> Arc<dyn Embedder> {
             Arc::new(OllamaEmbedder::new(base, if model.contains('/') { "nomic-embed-text".into() } else { model.clone() }))
         }
         "tfidf" => Arc::new(TfIdfEmbedder::new(384)),
-        "fastembed" | _ => {
+        _ => {
             // Only try FastEmbed if model is already cached, otherwise fallback to TfIdf to avoid 120MB download hang
             let model_name = &cfg.embeddings.model;
             if !is_fastembed_cached(model_name) {

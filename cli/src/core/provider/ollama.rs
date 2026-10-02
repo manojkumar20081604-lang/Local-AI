@@ -12,6 +12,8 @@ struct TagsResponse {
     models: Option<Vec<TagModel>>,
 }
 #[derive(Debug, Deserialize)]
+// Deserialized from Ollama API (`/api/tags`); some fields are unused locally.
+#[allow(dead_code)]
 struct TagModel {
     name: String,
     model: Option<String>,
@@ -21,6 +23,8 @@ struct TagModel {
     details: Option<TagDetails>,
 }
 #[derive(Debug, Deserialize)]
+// Deserialized from Ollama API (`/api/tags`); some fields are unused locally.
+#[allow(dead_code)]
 struct TagDetails {
     format: Option<String>,
     family: Option<String>,
@@ -102,7 +106,7 @@ impl Provider for OllamaProvider {
         base_url: &str,
         model: &str,
         messages: Vec<ChatMessage>,
-        temperature: f32,
+        _temperature: f32,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<String>
     {

@@ -1,7 +1,9 @@
 // Port of frontend/src/services/projectIntelligence.ts to Rust + hybrid embeddings
-use super::embeddings::{cosine, Embedder};
+use super::embeddings::Embedder;
 use super::fs::ProjectFile;
 use super::index::ProjectIndex;
+use super::symbols::{symbol_match_score, CodeGraph};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -188,7 +190,7 @@ pub fn build_project_context(text: &str, files: &[ProjectFile], file_loader: imp
     if contexts.is_empty() { return String::new(); }
     // Authoritative header
     let inventory: Vec<String> = files.iter().filter(|f| !f.is_directory).take(100).map(|f| format!("- {} ({} chars)", f.path, 0)).collect();
-    let header = if files.len() > 0 {
+    let header = if !files.is_empty() {
         format!("AUTHORITATIVE REAL PROJECT FILES (verified via `files list`, DO NOT invent outside this set, total {} files):\n{}\n", files.len(), inventory.join("\n"))
     } else { String::new() };
     format!(
@@ -205,30 +207,68 @@ pub fn hybrid_rank(
     index: Option<&ProjectIndex>,
     embedder: Option<Arc<dyn Embedder>>,
 ) -> Vec<RelevantFile> {
+    hybrid_rank_with_graph(text, files, index, embedder, None, None)
+}
+
+/// RAG 2.0 ranker (Phase 3.2): `0.55 cosine + 0.35 keyword + 0.15 symbol_match
+/// + 0.10 git_recency` (capped at 1.0). `graph`/`recency` are optional — when
+///   absent the score degrades to the Phase 1/2 formula so old callers keep working.
+pub fn hybrid_rank_with_graph(
+    text: &str,
+    files: &[ProjectFile],
+    index: Option<&ProjectIndex>,
+    embedder: Option<Arc<dyn Embedder>>,
+    graph: Option<&CodeGraph>,
+    recency: Option<&HashMap<String, f32>>,
+) -> Vec<RelevantFile> {
+    let symbol_boost = |path: &str| -> f32 {
+        graph
+            .and_then(|g| g.files.iter().find(|f| f.file == path))
+            .map(|fsym| symbol_match_score(text, fsym))
+            .unwrap_or(0.0)
+    };
+    let recency_boost = |path: &str| -> f32 {
+        recency.and_then(|m| m.get(path)).copied().unwrap_or(0.0)
+    };
     let intent = detect_intent(text);
     // Try embedding path if both index and embedder available
     if let (Some(idx), Some(emb)) = (index, embedder) {
         if let Ok(query_embs) = emb.embed(&[text.to_string()]) {
             if let Some(qemb) = query_embs.first() {
                 let scored = crate::core::index::query_index(idx, qemb, 20);
-                // Convert to RelevantFile with hybrid score: 0.55 cosine + 0.25 keyword + rest
+                // RAG 2.0: 0.55 cosine + 0.35 keyword + 0.15 symbol_match + 0.10 git_recency.
                 let keyword_map = keyword_scores(text, files, &intent);
                 let mut hybrid: Vec<RelevantFile> = Vec::new();
                 for (entry, cos, _chunk_idx) in scored {
                     if let Some(pf) = files.iter().find(|f| f.path == entry.path) {
                         let kw = keyword_map.get(&pf.path).cloned().unwrap_or(0.0);
                         // cosine 0..1, keyword 0..0.8
-                        let score = (0.55 * cos + 0.35 * kw + 0.10).min(1.0);
+                        let sym = symbol_boost(&pf.path);
+                        let rec = recency_boost(&pf.path);
+                        let score = (0.55 * cos + 0.35 * kw + 0.15 * sym + 0.10 * rec + 0.10).min(1.0);
                         let mut reasons = vec![format!("cosine {:.2}", cos)];
                         if kw > 0.1 { reasons.push(format!("keyword {:.2}", kw)); }
+                        if sym > 0.1 { reasons.push(format!("symbol {:.2}", sym)); }
+                        if rec > 0.1 { reasons.push(format!("recency {:.2}", rec)); }
                         if pf.path.contains("src/") { reasons.push("source".into()); }
                         hybrid.push(RelevantFile { file: pf.clone(), score, reasons });
                     }
                 }
                 // Also include keyword-only files that may have been missed (cosine < threshold but keyword high)
                 let mut seen: std::collections::HashSet<String> = hybrid.iter().map(|r| r.file.path.clone()).collect();
-                for rf in rank_relevant_files(text, files, &intent) {
+                for mut rf in rank_relevant_files(text, files, &intent) {
                     if !seen.contains(&rf.file.path) && rf.score >= 0.45 {
+                        // Apply the same RAG 2.0 boosts to keyword-only stragglers.
+                        let sym = symbol_boost(&rf.file.path);
+                        let rec = recency_boost(&rf.file.path);
+                        if sym > 0.1 {
+                            rf.score = (rf.score + 0.15 * sym).min(1.0);
+                            rf.reasons.push(format!("symbol {:.2}", sym));
+                        }
+                        if rec > 0.1 {
+                            rf.score = (rf.score + 0.10 * rec).min(1.0);
+                            rf.reasons.push(format!("recency {:.2}", rec));
+                        }
                         seen.insert(rf.file.path.clone());
                         hybrid.push(rf);
                     }
@@ -238,8 +278,25 @@ pub fn hybrid_rank(
             }
         }
     }
-    // Fallback to keyword
-    rank_relevant_files(text, files, &intent)
+    // Fallback to keyword (+ RAG 2.0 boosts when a graph/recency is supplied).
+    if graph.is_none() && recency.is_none() {
+        return rank_relevant_files(text, files, &intent);
+    }
+    let mut ranked = rank_relevant_files(text, files, &intent);
+    for rf in &mut ranked {
+        let sym = symbol_boost(&rf.file.path);
+        let rec = recency_boost(&rf.file.path);
+        if sym > 0.0 {
+            rf.score = (rf.score + 0.15 * sym).min(1.0);
+            rf.reasons.push(format!("symbol {:.2}", sym));
+        }
+        if rec > 0.0 {
+            rf.score = (rf.score + 0.10 * rec).min(1.0);
+            rf.reasons.push(format!("recency {:.2}", rec));
+        }
+    }
+    ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    ranked
 }
 
 fn keyword_scores(text: &str, files: &[ProjectFile], intent: &IntentResult) -> std::collections::HashMap<String, f32> {
@@ -281,6 +338,100 @@ pub fn build_project_context_hybrid(
     );
     format!(
         "{header}PROJECT INTENT: {}\nCONFIDENCE: {:.2}\n{}\n\nUse REAL project files as context:\n\n{}",
+        intent.intent, intent.confidence, intent_instructions(&intent.intent), contexts.join("\n\n==============================\n\n")
+    )
+}
+
+// ---------------------------------------------------------------------------
+// RAG 2.0 helpers (Phase 3.2): graph + recency without a full scan
+// ---------------------------------------------------------------------------
+
+/// Load a [`CodeGraph`] cheaply: prefer `index.json` symbols when fresh,
+/// else parse live (line scan, no embeddings). Never fails — empty graph on error.
+pub fn load_code_graph(
+    project: &super::projects::Project,
+    files: &[ProjectFile],
+    index: Option<&ProjectIndex>,
+    file_loader: impl Fn(&str) -> Option<String>,
+) -> CodeGraph {
+    if let Some(idx) = index {
+        if !idx.symbols.is_empty() && !super::index::needs_rebuild(project, idx) {
+            return CodeGraph { files: idx.symbols.clone(), edges: idx.imports.clone() };
+        }
+    }
+    // Live parse, bounded: skip huge repos gracefully (still no full content load).
+    if files.len() > 20000 {
+        return CodeGraph::default();
+    }
+    super::symbols::build_graph(files, file_loader)
+}
+
+/// Git recency for ranking (best-effort, empty outside a repo).
+pub fn load_recency(project: &super::projects::Project) -> HashMap<String, f32> {
+    let root = project
+        .folder_path
+        .as_ref()
+        .and_then(|f| std::path::PathBuf::from(f).canonicalize().ok());
+    super::symbols::git_recency(root.as_deref())
+}
+
+/// RAG 2.0 context: `hybrid_rank_with_graph` + symbol-chain citations so a
+/// cold-start question answers with `path:line` defs, no full scan.
+pub fn build_project_context_rag2(
+    text: &str,
+    files: &[ProjectFile],
+    index: Option<&ProjectIndex>,
+    embedder: Option<Arc<dyn Embedder>>,
+    graph: Option<&CodeGraph>,
+    recency: Option<&HashMap<String, f32>>,
+    file_loader: impl Fn(&str) -> Option<String>,
+) -> String {
+    let intent = detect_intent(text);
+    let hybrid = hybrid_rank_with_graph(text, files, index, embedder, graph, recency);
+    let relevant = hybrid.into_iter().filter(|r| r.score >= 0.25).take(6).collect::<Vec<_>>();
+    let fallback: Vec<&ProjectFile> = files.iter().filter(|f| !f.is_directory).take(6).collect();
+    let to_use: Vec<&ProjectFile> = if relevant.is_empty() { fallback } else { relevant.iter().map(|r| &r.file).collect() };
+    if to_use.is_empty() {
+        return String::new();
+    }
+    // Symbol-chain block: defs with file:line, from the graph.
+    let mut symbol_block = String::new();
+    if let Some(g) = graph {
+        let hits = super::symbols::resolve_query(text, g);
+        if !hits.is_empty() {
+            let lines: Vec<String> = hits
+                .iter()
+                .take(5)
+                .flat_map(|(path, _)| {
+                    let path = path.clone();
+                    g.defs_of(&path).into_iter().take(3).map(move |d| format!("- {}:{} {} ({})", path, d.line, d.name, d.kind))
+                })
+                .take(10)
+                .collect();
+            if !lines.is_empty() {
+                symbol_block = format!("SYMBOL GRAPH (code structure, cite as [path:line]):\n{}\n\n", lines.join("\n"));
+            }
+        }
+    }
+    let mut contexts = Vec::new();
+    for f in to_use {
+        if let Some(content) = file_loader(&f.path) {
+            let limited = if content.len() > 8000 { content[..8000].to_string() } else { content };
+            contexts.push(format!("FILE: {}\n\n{}", f.path, limited));
+        }
+    }
+    if contexts.is_empty() {
+        return String::new();
+    }
+    let inventory_lines: Vec<String> = files.iter().filter(|f| !f.is_directory).map(|f| format!("- {}", f.path)).take(80).collect();
+    let header = format!(
+        "AUTHORITATIVE REAL PROJECT FILES (verified via `files list`, total {} files — DO NOT invent outside this set):\n{}\n{} truncated, see inventory above.\n",
+        files.len(),
+        inventory_lines.join("\n"),
+        if files.len() > 80 { format!("(+{} more)", files.len() - 80) } else { String::new() }
+    );
+    format!(
+        "{header}{symbol_block}PROJECT INTENT: {}\nCONFIDENCE: {:.2}\n{}\n\nUse REAL project files as context:\n\n{}",
         intent.intent, intent.confidence, intent_instructions(&intent.intent), contexts.join("\n\n==============================\n\n")
     )
 }

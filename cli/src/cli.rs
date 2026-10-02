@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use crate::commands::{project, models, chat, files, exec, analyze, finetune, doctor, config, index};
+use crate::commands::{project, models, chat, files, exec, analyze, finetune, doctor, config, graph, index, git, memory, mission, browse, plan, debug, agent, bench, dataset, metrics, propose};
 
 #[derive(Parser)]
 #[command(name = "local-ai", version, about = "Local AI CLI — local model workspace + finetuning (all OS)")]
@@ -23,6 +23,10 @@ pub struct Cli {
     /// App mode: plan (read-only, no writes/exec) | build (allow writes) — plan can't build anything
     #[arg(long, global = true, env = "LOCAL_AI_MODE")]
     pub mode: Option<String>,
+
+    /// Extra MCP tool servers (repeatable): --mcp filesystem --mcp github
+    #[arg(long, global = true)]
+    pub mcp: Vec<String>,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -50,4 +54,31 @@ pub enum Commands {
     Config(config::ConfigArgs),
     /// Index project for hybrid retrieval (embeddings)
     Index(index::IndexArgs),
+    /// Git intelligence (read-only: status, diff, log, blame)
+    Git(git::GitArgs),
+    /// Build an approvable execution graph for a goal (read-only)
+    Plan(plan::PlanArgs),
+    /// Execute a plan graph step by step (preview with --dry-run)
+    #[command(name = "exec-plan")]
+    ExecPlan(plan::ExecPlanArgs),
+    /// Self-debugging loop: run tests, parse failures, fix, re-test
+    Debug(debug::DebugArgs),
+    /// Code graph: symbols + imports (read-only)
+    Graph(graph::GraphArgs),
+    /// Three-tier memory: project|user|task (show is read-only)
+    Memory(memory::MemoryArgs),
+    /// Orchestrated specialists: planner → researcher → coder → tester → reviewer
+    Agent(agent::AgentArgs),
+    /// Persisted missions: create → resume → show (command-center feel)
+    Mission(mission::MissionArgs),
+    /// Browse the web: fetch pages, extract code blocks, cite URLs
+    Browse(browse::BrowseArgs),
+    /// Benchmark studio: TPS, TTFT, pass@1 on fixture tasks
+    Bench(bench::BenchArgs),
+    /// Dataset feedback loop: approved interactions → QLoRA JSONL
+    Dataset(dataset::DatasetArgs),
+    /// Project health: retrieval hit-rate, verifier reject-rate, test pass-rate
+    Metrics(metrics::MetricsArgs),
+    /// Self-improvement proposals as inspectable plan-graphs
+    Propose(propose::ProposeArgs),
 }

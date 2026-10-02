@@ -88,8 +88,8 @@ impl Provider for LmStudioProvider {
             }
         }
         let trimmed = buffer.trim();
-        if trimmed.starts_with("data:") {
-            let data = trimmed[5..].trim();
+        if let Some(data) = trimmed.strip_prefix("data:") {
+            let data = data.trim();
             if data != "[DONE]" {
                 if let Ok(json) = serde_json::from_str::<StreamChunk>(data) {
                     if let Some(content) = json.choices.and_then(|c| c.into_iter().next()).and_then(|c| c.delta).and_then(|d| d.content) {

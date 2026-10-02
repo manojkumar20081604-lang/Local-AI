@@ -6,7 +6,7 @@ use local_ai::core::config::AppConfig;
 use local_ai::core::embeddings::{cosine, get_embedder, TfIdfEmbedder, Embedder};
 use local_ai::core::fs::ProjectFile;
 use local_ai::core::intelligence::{detect_intent, hybrid_rank, rank_relevant_files, ProjectIntent};
-use local_ai::core::index::{build_index, load_index, query_index, ProjectIndex};
+use local_ai::core::index::{build_index, load_index, query_index};
 use local_ai::core::projects::Project;
 use std::fs;
 use std::sync::Arc;

@@ -114,10 +114,72 @@ local-ai analyze "where is the database code?" --project MyApp --dry-run  # only
 local-ai analyze "create src/services/authService.ts" --project MyApp --dry-run --show-verifier  # would-reject invented files
 # Verifier always runs post-generation; strict mode exits 2 on hallucination (for CI)
 
+# Git intelligence (read-only — safe in plan mode)
+local-ai git status --project MyApp
+local-ai git diff --project MyApp [--staged] [--file src/x.rs]
+local-ai git log --project MyApp -n 20
+local-ai git blame --project MyApp --file src/x.rs --lines 10,40
+local-ai git branches --project MyApp
+local-ai git commit --project MyApp --dry-run   # changeset preview (no commit)
+local-ai git commit --project MyApp --yes       # build-gated, approval-gated, optional --test-cmd gate
+
+# Plan Mode 2.0 — approvable execution graphs (read-only)
+local-ai plan "add JWT auth" --project MyApp            # human view + saves to cache
+local-ai plan "fix crash" --project MyApp --json        # machine-readable graph
+local-ai exec-plan ./plans/add-jwt-auth-<ts>.json --dry-run --project MyApp
+local-ai exec-plan ./plans/add-jwt-auth-<ts>.json --yes --project MyApp  # build-gated
+
+# Self-debugging loop (build-gated; --dry-run previews)
+local-ai debug "fix failing tests" --project MyApp --max-attempts 3
+local-ai debug --project MyApp --test-cmd "npm test" --yes
+
+# Agent system — orchestrated specialists (foreground, bounded, no daemon)
+local-ai agent run "add auth" --project MyApp --max-steps 20 --approve dangerous
+local-ai agent run "fix failing tests" --project MyApp --dry-run   # preview only, plan-mode safe
+local-ai agent run "fix tests" --project MyApp --yes --test-cmd "cargo test"  # skip approvals
+# Roles: planner (1.4 graph) → researcher (read-only) → coder (SEARCH-verified) → tester/debugger (1.2 loop) → reviewer (verifier + secrets/traversal)
+# Safety: budget (steps/tools/wall-time) + kill-switch (rm -rf /, mkfs, curl POST exfil blocked unless --approve dangerous)
+# Trace: ~/.cache/local-ai/<id>/missions/<ts>/trace.jsonl (every agent I/O, feeds Phase 4/5)
+
 # Index (hybrid retrieval — local embeddings, no cloud)
 local-ai index rebuild --project MyApp           # build ~/.cache/local-ai/<id>/index.json (chunk 1500/200, bge-small-en-v1.5 or TfIdf)
-local-ai index status --project MyApp
+local-ai index status --project MyApp            # now also shows symbols=N files/M edges
 local-ai index rebuild --project ./my-app --embeddings fastembed  # force fastembed (120MB ONNX, 384 dim, ~180ms/query CPU)
+local-ai index rebuild --project MyApp --symbols=false  # skip code-graph extraction (default on)
+
+# Memory — three tiers (project|user|task; show is read-only, set/forget need build)
+local-ai memory show --scope project --project MyApp
+local-ai memory set --scope project --project MyApp --content "uses React+Rust+Postgres; auth in src/auth.rs"
+local-ai memory set --scope user --content "prefers TypeScript, short answers, Linux"
+local-ai memory forget --scope project --project MyApp --filter "old stack"
+# Auto-journalled after every `git commit` (files + stack, secrets redacted); injected into chat/analyze
+
+# Code graph — symbols + imports (read-only, plan-mode safe)
+local-ai graph --project MyApp --file src/auth.rs          # Imports / Imported-by / Functions / Tests / Recent changes
+local-ai graph --project MyApp --query "where is auth handled?"  # symbol resolution, no LLM
+
+# Chat routing — cheapest capable model (logs choice with --show-context)
+local-ai chat "fix the login bug" --project MyApp --route   # coding → 7-15B model
+local-ai chat "explain the architecture" --project MyApp --route  # reason → largest model
+# Override per class in ~/.config/local-ai/config.toml: [router] coding = "qwen2.5-14b"
+
+# Missions — persisted orchestrator state (same engine as `agent run`, kill-safe)
+local-ai mission create "add stripe checkout" --project MyApp
+local-ai mission list --project MyApp
+local-ai mission show 24                    # TASKS/CHANGES/TESTS/LOGS from missions.json + trace.jsonl
+local-ai mission show 24 --watch            # stream step updates until done
+local-ai mission resume 24 --yes            # run remaining steps (persists per step — kill and resume)
+local-ai mission cancel 24
+
+# MCP tool servers — external tools alongside built-ins (JSON-RPC over stdio)
+local-ai chat "list the docs" --project MyApp --tools --mcp filesystem
+local-ai chat "summarize issues" --project MyApp --tools --mcp filesystem --mcp github
+# Reference servers in mcp/ (python3, stdlib only, read-only first): filesystem, github
+# Security: MCP writes/exec gated by plan/build + approval; env-exfil args need --approve dangerous
+
+# Browse — web research with cited code blocks (never silent: every URL logged)
+local-ai browse "stripe checkout api" --max-pages 5
+local-ai browse "tokio spawn" --seed-url https://docs.rs/tokio --max-pages 3 --show-context
 
 # Finetune — best for local models
 local-ai finetune status  # shows GPU, OS, recommended backend
@@ -127,6 +189,24 @@ local-ai finetune train --base Qwen/Qwen2.5-7B-Instruct --dataset ./dataset.json
 local-ai finetune merge --base Qwen/Qwen2.5-7B-Instruct --adapter ./outputs/lora-adapter --out ./outputs/merged
 local-ai finetune quantize --model ./outputs/merged --out ./outputs/gguf --quant q4_k_m
 local-ai finetune pipeline --project ./my-app --base Qwen/Qwen2.5-7B-Instruct --dry-run  # full pipeline
+local-ai finetune eval --base bench/results/base.json --adapter bench/results/adapter.json  # offline gate (blocks on regression)
+local-ai finetune eval --base qwen2.5:7b --adapter my-adapter --bench bench/prompts.jsonl --project MyApp  # live: streams both, saves runs, gates deploy
+
+# Model Lab — benchmark studio (TPS, TTFT, pass@1 on fixture tasks)
+local-ai bench run --model qwen2.5:9b --suite coding --project MyApp   # streams bench/prompts.jsonl, saves bench/results/<model>-<ts>.json
+local-ai bench run --model X --prompt-set bench/prompts.jsonl --out ./bench/results
+local-ai bench compare bench/results/a.json bench/results/b.json       # before/after table + GATE verdict
+
+# Dataset feedback loop — approved interactions → QLoRA JSONL (reuses `finetune prepare` format)
+local-ai dataset collect --project MyApp --from missions --only-approved --out ./dataset.jsonl
+local-ai dataset collect --project MyApp --from all --format alpaca --out ./dataset.jsonl  # then: finetune train --dataset ./dataset.jsonl
+# Finetuning never bypasses grounding: --only-approved keeps verifier-clean samples, verifier still runs post-deploy.
+
+# Metrics + self-improvement proposals (plan-graphs, never silent self-mod)
+local-ai metrics --project MyApp               # retrieval hit-rate, verifier reject-rate, test pass-rate (from traces + index)
+local-ai metrics --project MyApp --json        # machine-readable for scripts
+local-ai propose --project MyApp               # e.g. "retrieval failed 18% — suggest symbol retrieval (+12%)" with [Inspect] [Apply] [Reject]
+local-ai propose --project MyApp --apply rebuild-index-symbols --yes  # saves plan to cache, prints exec-plan command
 ```
 
 ## Project Context

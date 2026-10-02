@@ -78,7 +78,7 @@ pub fn list_project_files(project: &Project) -> Result<Vec<ProjectFile>> {
     }
     let mut files = Vec::new();
     scan_dir(&root, &root, &mut files)?;
-    files.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+    files.sort_by_key(|a| a.path.to_lowercase());
     Ok(files)
 }
 
@@ -208,7 +208,7 @@ pub fn collect_files_for_finetune(project: &Project) -> Result<Vec<(String, Stri
     let root = PathBuf::from(folder).canonicalize()?;
     let mut files = Vec::new();
     collect_recursive(&root, &root, &mut files)?;
-    files.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    files.sort_by_key(|a| a.0.to_lowercase());
     Ok(files)
 }
 

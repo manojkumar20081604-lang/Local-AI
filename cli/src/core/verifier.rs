@@ -55,7 +55,7 @@ pub fn extract_file_mentions(text: &str) -> Vec<String> {
         if s.starts_with("http://") || s.starts_with("https://") { return; }
         // Must contain / or .ext
         let has_slash = s.contains('/');
-        let has_dot = s.contains('.') && s.rsplit('.').next().map(|ext| ext.len() >= 1 && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric())).unwrap_or(false);
+        let has_dot = s.contains('.') && s.rsplit('.').next().map(|ext| !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric())).unwrap_or(false);
         if !has_slash && !has_dot { return; }
         // Reject if it's just a sentence
         if s.contains(' ') { return; }
@@ -85,7 +85,7 @@ pub fn extract_file_mentions(text: &str) -> Vec<String> {
     let tokens: Vec<String> = text.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',' || c == ';' || c == '"' || c == '\'' || c == '<' || c == '>' || c == '[' || c == ']' || c == '`').map(|s| s.to_string()).collect();
     for tok in tokens {
         // Clean token: remove trailing : etc and leading/trailing backticks already split, but also handle colon
-        let t = tok.trim().trim_end_matches(|c| c == ':' || c == '.' || c == ',' || c == ';').to_string();
+        let t = tok.trim().trim_end_matches([':', '.', ',', ';']).to_string();
         if t.is_empty() { continue; }
         // Skip tokens that are just words with slash but no file extension (e.g., Grant/Revoke)
         if t.contains('/') && t.len() < 120 {
@@ -117,7 +117,7 @@ pub fn extract_file_mentions(text: &str) -> Vec<String> {
     }
 
     // 3. Also look for markdown inline `src/...`
-    for cap in text.split('`') {
+    for _cap in text.split('`') {
         // odd splits are inside backticks? Actually splitting by ` gives alternating outside/inside
     }
     // For now, the token scan already caught those.
@@ -150,8 +150,8 @@ pub fn extract_symbols(text: &str) -> Vec<String> {
         if c == '`' {
             if in_tick {
                 let t = tick_content.trim().to_string();
-                if t.len() >= 2 && t.len() < 60 && !t.contains(' ') && t.chars().any(|c| c.is_alphanumeric()) {
-                    if !seen.contains(&t) { seen.insert(t.clone()); out.push(t); }
+                if t.len() >= 2 && t.len() < 60 && !t.contains(' ') && t.chars().any(|c| c.is_alphanumeric()) && !seen.contains(&t) {
+                    seen.insert(t.clone()); out.push(t);
                 }
                 tick_content.clear();
             }
@@ -169,8 +169,8 @@ pub fn extract_symbols(text: &str) -> Vec<String> {
                 continue;
             }
             // Check if followed by () in original text? Simplified: if text contains "w(" near
-            if text.contains(&format!("{}(", w)) || text.contains(&format!("{}.", w)) {
-                if !seen.contains(w) { seen.insert(w.to_string()); out.push(w.to_string()); }
+            if (text.contains(&format!("{}(", w)) || text.contains(&format!("{}.", w))) && !seen.contains(w) {
+                seen.insert(w.to_string()); out.push(w.to_string());
             }
         }
     }
@@ -306,7 +306,7 @@ pub fn is_project_name_query(text: &str) -> bool {
         || t.contains("project name") && (t.contains("what") || t.contains("which"))
 }
 
-pub fn deterministic_inventory_response(project: &Project, files: &[ProjectFile]) -> String {
+pub fn deterministic_inventory_response(_project: &Project, files: &[ProjectFile]) -> String {
     let real: String = files.iter().map(|f| if f.is_directory { format!("[DIR] {}", f.path) } else { format!("[FILE] {}", f.path) }).collect::<Vec<_>>().join("\n");
     format!("PROJECT INVENTORY\n\n{}\n\nTotal items: {} (verified via `files list`, no hallucination)", real, files.len())
 }
@@ -343,12 +343,7 @@ fn find_verify_script(project: &Project) -> Option<std::path::PathBuf> {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../finetune/verify.py"),
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../finetune/verify.py"),
     ];
-    for c in candidates {
-        if !c.as_os_str().is_empty() && c.exists() {
-            return Some(c);
-        }
-    }
-    None
+    candidates.into_iter().find(|c| !c.as_os_str().is_empty() && c.exists())
 }
 
 /// Try external Python verifier (groundrails/lettucedetect/ragground/groundlens) via subprocess.
@@ -363,7 +358,7 @@ pub fn try_verify_with_python(
     let script = find_verify_script(project)?;
     // Write answer to temp file to avoid arg length limits and escaping (cross-platform temp_dir)
     let mut tmp = std::env::temp_dir().join(format!("local-ai-answer-{}.txt", uuid::Uuid::new_v4()));
-    if let Err(_) = std::fs::write(&tmp, response) {
+    if std::fs::write(&tmp, response).is_err() {
         tmp = std::env::temp_dir().join("local-ai-answer.txt");
         if std::fs::write(&tmp, response).is_err() { return None; }
     }

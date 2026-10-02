@@ -4,7 +4,7 @@ use console::style;
 
 use crate::core::config::load_config;
 use crate::core::embeddings::get_embedder;
-use crate::core::index::{build_index, index_status, load_index, index_path};
+use crate::core::index::{build_index_with_symbols, index_status, load_index, index_path};
 use crate::core::projects;
 
 #[derive(Parser)]
@@ -22,6 +22,9 @@ pub enum IndexCommands {
         /// Force rebuild even if cache fresh
         #[arg(long)]
         force: bool,
+        /// Extract code symbols + import edges (default on, pure-Rust, no binary deps)
+        #[arg(long, default_value_t = true)]
+        symbols: bool,
     },
     /// Show index status
     Status {
@@ -42,7 +45,7 @@ pub enum IndexCommands {
 
 pub async fn handle(args: IndexArgs) -> Result<()> {
     match args.command {
-        IndexCommands::Rebuild { project, force } => {
+        IndexCommands::Rebuild { project, force, symbols } => {
             let proj = projects::resolve_project(project)?;
             if !force {
                 if let Some(idx) = load_index(&proj)? {
@@ -55,9 +58,9 @@ pub async fn handle(args: IndexArgs) -> Result<()> {
             }
             let cfg = load_config().unwrap_or_default();
             let embedder = get_embedder(&cfg);
-            println!("Rebuilding index for {} with {}...", proj.folder_path.as_deref().unwrap_or("?"), embedder.name());
-            let idx = build_index(&proj, embedder)?;
-            println!("{} Indexed {} files → {}", style("✓").green(), idx.files.len(), index_path(&proj)?.display());
+            println!("Rebuilding index for {} with {} (symbols={})...", proj.folder_path.as_deref().unwrap_or("?"), embedder.name(), symbols);
+            let idx = build_index_with_symbols(&proj, embedder, symbols)?;
+            println!("{} Indexed {} files ({} symbol files, {} edges) → {}", style("✓").green(), idx.files.len(), idx.symbols.len(), idx.imports.len(), index_path(&proj)?.display());
         }
         IndexCommands::Status { project } => {
             let proj = projects::resolve_project(project)?;

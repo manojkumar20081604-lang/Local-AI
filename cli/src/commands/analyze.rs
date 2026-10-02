@@ -57,14 +57,16 @@ pub async fn handle(
     let files = core_fs::list_project_files(&proj)?;
     let intent = intelligence::detect_intent(&args.query);
     println!("intent: {} (confidence {:.2}) keywords: {:?}  grounding: {}", intent.intent, intent.confidence, intent.keywords, grounding);
-    // Try hybrid if index exists
+    // RAG 2.0 (Phase 3.2): symbol + recency boosts, no full scan.
     let index_opt = crate::core::index::load_index(&proj).ok().flatten();
     let use_hybrid = if let Some(idx) = &index_opt { !crate::core::index::needs_rebuild(&proj, idx) } else { false };
+    let graph = intelligence::load_code_graph(&proj, &files, index_opt.as_ref(), |p| core_fs::read_project_file(&proj, p).ok());
+    let recency = intelligence::load_recency(&proj);
     let relevant = if use_hybrid {
         let embedder = crate::core::embeddings::get_embedder(&cfg);
-        intelligence::hybrid_rank(&args.query, &files, index_opt.as_ref(), Some(embedder))
+        intelligence::hybrid_rank_with_graph(&args.query, &files, index_opt.as_ref(), Some(embedder), Some(&graph), Some(&recency))
     } else {
-        intelligence::rank_relevant_files(&args.query, &files, &intent)
+        intelligence::hybrid_rank_with_graph(&args.query, &files, None, None, Some(&graph), Some(&recency))
     };
     let top: Vec<_> = relevant.into_iter().take(8).collect();
     if top.is_empty() {
@@ -153,16 +155,36 @@ pub async fn handle(
             _ => "qwen/qwen3.5-9b".to_string(),
         }
     };
-    let context = {
+    let mut context = {
         let idx = crate::core::index::load_index(&proj).ok().flatten();
         let use_hybrid = if let Some(i) = &idx { !crate::core::index::needs_rebuild(&proj, i) } else { false };
+        let graph = intelligence::load_code_graph(&proj, &files, idx.as_ref(), |p| core_fs::read_project_file(&proj, p).ok());
+        let recency = intelligence::load_recency(&proj);
         if use_hybrid {
             let emb = crate::core::embeddings::get_embedder(&cfg);
-            intelligence::build_project_context_hybrid(&args.query, &files, idx.as_ref(), Some(emb), |p| core_fs::read_project_file(&proj, p).ok())
+            intelligence::build_project_context_rag2(&args.query, &files, idx.as_ref(), Some(emb), Some(&graph), Some(&recency), |p| core_fs::read_project_file(&proj, p).ok())
         } else {
-            intelligence::build_project_context(&args.query, &files, |p| core_fs::read_project_file(&proj, p).ok())
+            intelligence::build_project_context_rag2(&args.query, &files, None, None, Some(&graph), Some(&recency), |p| core_fs::read_project_file(&proj, p).ok())
         }
     };
+    // Phase 3.1 memory tiers (best-effort).
+    {
+        let user_mem = crate::core::memory::load_memory(crate::core::memory::MemoryScope::User, None, None).unwrap_or_default();
+        let proj_mem = crate::core::memory::load_memory(crate::core::memory::MemoryScope::Project, Some(&proj), None).unwrap_or_default();
+        let merged = crate::core::memory::merged_context(&user_mem, &proj_mem, None);
+        if !merged.is_empty() {
+            context = format!("MEMORY (user + project):\n{}\n\n{}", merged, context);
+        }
+    }
+    // Git intelligence (Phase 1.1): branch + status + recent commits, best-effort.
+    if let Some(folder) = proj.folder_path.as_ref() {
+        if let Ok(root) = std::path::PathBuf::from(folder).canonicalize() {
+            if let Ok(git_state) = crate::core::git::recent_summary(&root) {
+                context.push_str("\n\nGIT STATE (authoritative `git` output):\n");
+                context.push_str(&git_state);
+            }
+        }
+    }
     let temp = match grounding.as_str() {
         "strict" => 0.2, "creative" => 0.7, _ => 0.4,
     };

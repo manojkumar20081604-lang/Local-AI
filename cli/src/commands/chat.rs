@@ -63,6 +63,10 @@ pub struct ChatArgs {
     /// Use tool calling (requires model + provider that supports tools: Ollama/LM Studio with tool-capable model)
     #[arg(long)]
     pub tools: bool,
+
+    /// Route to the cheapest capable model for this task (simple|coding|reason by keywords + size tags)
+    #[arg(long)]
+    pub route: bool,
 }
 
 fn system_prompt(project_context: &str, grounding: &str, use_tools: bool) -> String {
@@ -119,6 +123,45 @@ async fn resolve_model(
     }
 }
 
+/// Route to the cheapest capable model: classify the task, list inventory,
+// pick by size tag, honour `[router]` overrides. Falls back gracefully to
+// the default model when no provider is reachable.
+async fn route_model_verbose(
+    task: &str,
+    provider_kind: &ProviderKind,
+    provider_url: &str,
+    cfg: &crate::core::config::AppConfig,
+    verbose: bool,
+) -> Result<String> {
+    use crate::core::router as core_router;
+    let class = core_router::classify_task(task);
+    let url = if provider_url.is_empty() { "" } else { provider_url };
+    let kind = if provider_url.is_empty() && provider_kind == &ProviderKind::Auto { &ProviderKind::Auto } else { provider_kind };
+    let available: Vec<String> = provider::list_models_unified(kind, url, cfg)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    let overridden = cfg.router.override_for(class);
+    match core_router::pick_model(class, &available, overridden) {
+        Some(m) => {
+            if verbose {
+                eprintln!(
+                    "{} router: task class={} → model={} ({} candidates{})",
+                    console::style("[route]").dim(),
+                    class,
+                    m,
+                    available.len(),
+                    overridden.map(|o| format!(", override={}", o)).unwrap_or_default()
+                );
+            }
+            Ok(m)
+        }
+        None => resolve_model(None, provider_kind, provider_url, cfg).await,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn chat_once(
     model: &str,
@@ -134,6 +177,7 @@ async fn chat_once(
     grounding: &str,
     provider_kind: ProviderKind,
     provider_url: String,
+    mcp_servers: &[String],
 ) -> Result<()> {
     let cfg = load_config().unwrap_or_default();
     let messages_hist = project.messages.clone();
@@ -173,28 +217,58 @@ async fn chat_once(
         }
     }
 
-    let project_context = if no_context || files.is_empty() {
+    let mut project_context = if no_context || files.is_empty() {
         String::new()
     } else {
-        // Try hybrid retrieval if index exists and is fresh
+        // RAG 2.0 (Phase 3.2): graph + recency boosted ranking, no full scan.
         let cfg_inner = load_config().unwrap_or_default();
         let index_opt = crate::core::index::load_index(project).ok().flatten();
         let use_hybrid = if let Some(idx) = &index_opt {
             !crate::core::index::needs_rebuild(project, idx)
         } else { false };
+        let graph = intelligence::load_code_graph(project, &files, index_opt.as_ref(), |p| {
+            core_fs::read_project_file(project, p).ok()
+        });
+        let recency = intelligence::load_recency(project);
         if use_hybrid {
             let embedder = crate::core::embeddings::get_embedder(&cfg_inner);
-            crate::core::intelligence::build_project_context_hybrid(
+            intelligence::build_project_context_rag2(
                 user_text, &files, index_opt.as_ref(), Some(embedder),
+                Some(&graph), Some(&recency),
                 |p| core_fs::read_project_file(project, p).ok()
             )
         } else {
-            // Fallback: keyword + inventory header (still grounded vs old version)
-            intelligence::build_project_context(user_text, &files, |p| {
-                core_fs::read_project_file(project, p).ok()
-            })
+            // Keyword path still gets symbol/recency boosts (no embeddings needed).
+            intelligence::build_project_context_rag2(
+                user_text, &files, None, None,
+                Some(&graph), Some(&recency),
+                |p| core_fs::read_project_file(project, p).ok()
+            )
         }
     };
+
+    // Phase 3.1 memory: user → project tiers prepended (best-effort, capped).
+    if !no_context && !project_context.is_empty() {
+        let user_mem = crate::core::memory::load_memory(crate::core::memory::MemoryScope::User, None, None).unwrap_or_default();
+        let proj_mem = crate::core::memory::load_memory(crate::core::memory::MemoryScope::Project, Some(project), None).unwrap_or_default();
+        let merged = crate::core::memory::merged_context(&user_mem, &proj_mem, None);
+        if !merged.is_empty() {
+            project_context = format!("MEMORY (user + project, stored locally):\n{}\n\n{}", merged, project_context);
+        }
+    }
+
+    // Git intelligence (Phase 1.1): authoritative branch + status + recent
+    // commits. Best-effort — silent when the project is not a git repo.
+    if !no_context && !project_context.is_empty() {
+        if let Some(folder) = project.folder_path.as_ref() {
+            if let Ok(root) = std::path::PathBuf::from(folder).canonicalize() {
+                if let Ok(git_state) = crate::core::git::recent_summary(&root) {
+                    project_context.push_str("\n\nGIT STATE (authoritative `git` output):\n");
+                    project_context.push_str(&git_state);
+                }
+            }
+        }
+    }
 
     if show_context && !project_context.is_empty() {
         eprintln!("{}--- PROJECT CONTEXT ({} chars, grounding={}) ---\n{}\n--- END CONTEXT ---",
@@ -221,12 +295,59 @@ async fn chat_once(
         let model_supports = crate::core::tools::supports_tools_for_model(model);
         if provider_supports && model_supports {
             if show_verifier { eprintln!("{} tool calling enabled (model: {}, provider: {})", style("[tools]").dim(), model, provider_kind); }
-            let tools = crate::core::tools::project_tools();
+            let mut tools = crate::core::tools::project_tools();
+            // Phase 4.2: external MCP tools alongside built-ins.
+            let mut mcp_sessions: Vec<crate::core::mcp::McpSession> = Vec::new();
+            for server in mcp_servers {
+                let root = project.folder_path.clone().unwrap_or_else(|| ".".to_string());
+                match crate::core::mcp::McpSession::connect(server, &root) {
+                    Ok(mut session) => match session.list_tools() {
+                        Ok(descriptors) => {
+                            eprintln!("{} MCP server '{}' ({} tools)", style("[mcp]").dim(), server, descriptors.len());
+                            for d in &descriptors {
+                                tools.push(d.to_definition(server));
+                            }
+                            mcp_sessions.push(session);
+                        }
+                        Err(e) => eprintln!("  {} MCP '{}' tools/list failed: {}", style("✗").red(), server, e),
+                    },
+                    Err(e) => eprintln!("  {} MCP '{}' connect failed: {}", style("✗").red(), server, e),
+                }
+            }
             match provider::chat_with_tools_unified(&provider_kind, &provider_url, &cfg, model, lm_messages.clone(), tools.clone(), grounding_temperature(grounding)).await {
-                Ok((tool_content, tool_calls)) if !tool_calls.is_empty() => {
+                Ok((_tool_content, tool_calls)) if !tool_calls.is_empty() => {
                     eprintln!("{} model requested {} tool calls", style("[tools]").dim(), tool_calls.len());
                     let mut tool_results_text = String::new();
                     for call in &tool_calls {
+                        // Route mcp__<server>__<tool> to the matching live session.
+                        if let Some((server, tool)) = crate::core::mcp::split_qualified(&call.name) {
+                            match mcp_sessions.iter_mut().find(|s| s.server_name() == server) {
+                                Some(session) => {
+                                    match crate::core::mcp::mcp_call_allowed(server, tool, &call.parsed_args, false) {
+                                        Ok(()) => match session.call_tool(tool, &call.parsed_args) {
+                                            Ok(val) => {
+                                                let pretty = serde_json::to_string_pretty(&val).unwrap_or(val.to_string());
+                                                eprintln!("  {} [mcp:{}] {} -> {}", style("→").cyan(), server, tool, pretty.lines().next().unwrap_or(""));
+                                                tool_results_text.push_str(&format!("Tool '{}' with args {} returned:\n{}\n\n", call.name, call.arguments, pretty));
+                                            }
+                                            Err(e) => {
+                                                eprintln!("  {} [mcp:{}] {} error: {}", style("✗").red(), server, tool, e);
+                                                tool_results_text.push_str(&format!("Tool '{}' error: {}\n", call.name, e));
+                                            }
+                                        },
+                                        Err(e) => {
+                                            eprintln!("  {} [mcp:{}] {} blocked: {}", style("✗").red(), server, tool, e);
+                                            tool_results_text.push_str(&format!("Tool '{}' blocked: {}\n", call.name, e));
+                                        }
+                                    }
+                                }
+                                None => {
+                                    eprintln!("  {} {} error: no live MCP session for '{}'", style("✗").red(), call.name, server);
+                                    tool_results_text.push_str(&format!("Tool '{}' error: no live MCP session\n", call.name));
+                                }
+                            }
+                            continue;
+                        }
                         match crate::core::tools::execute_tool(project, call).await {
                             Ok(val) => {
                                 let pretty = serde_json::to_string_pretty(&val).unwrap_or(val.to_string());
@@ -251,14 +372,14 @@ async fn chat_once(
                         let _ = io::stdout().flush();
                         full2.push_str(chunk);
                     }).await;
-                    let mut assistant_content = match resp2 {
+                    let assistant_content = match resp2 {
                         Ok(s) if !s.is_empty() => s,
                         Ok(_) => full2.clone(),
                         Err(e) => { eprintln!("\nTool final chat failed: {}", e); full2.clone() }
                     };
                     println!("\n");
                     // Verifier for tool final — hybrid lexical + Python (groundrails/LettuceDetect) when --show-verifier
-                    let verifier_report = if !no_verify && !files.is_empty() {
+                    let _verifier_report = if !no_verify && !files.is_empty() {
                         let report = crate::core::verifier::verify_response_hybrid(&assistant_content, project, &files, grounding, show_verifier);
                         if show_verifier {
                             eprintln!("{} verifier (tools): {} mentioned, {} invented, score {:.2}, hallucinated={} (mode={})", style("[verifier]").dim(), report.total_mentioned, report.invented_count, report.hallucination_score, report.is_hallucinated, report.grounding_mode);
@@ -294,10 +415,10 @@ async fn chat_once(
                 Ok((tool_content, _)) if !tool_content.is_empty() => {
                     if show_verifier { eprintln!("{} tools: no tool calls, using direct content ({} chars)", style("[tools]").dim(), tool_content.len()); }
                     // Treat tool_content as assistant content and continue to verifier (skip streaming)
-                    let mut assistant_content = tool_content;
+                    let assistant_content = tool_content;
                     println!("{} {}", style("Assistant:").cyan().bold(), assistant_content);
                     println!();
-                    let verifier_report = if !no_verify && !files.is_empty() {
+                    let _verifier_report = if !no_verify && !files.is_empty() {
                         let report = crate::core::verifier::verify_response_hybrid(&assistant_content, project, &files, grounding, show_verifier);
                         if show_verifier {
                             eprintln!("{} verifier: {} mentioned, {} invented, score {:.2}, hallucinated={}", style("[verifier]").dim(), report.total_mentioned, report.invented_count, report.hallucination_score, report.is_hallucinated);
@@ -373,7 +494,7 @@ async fn chat_once(
     println!("\n");
 
     // Layer 4: verifier (post-generation) — hybrid lexical + optional Python external (groundrails/LettuceDetect/ragground)
-    let mut verifier_report = if !no_verify && !files.is_empty() {
+    let verifier_report = if !no_verify && !files.is_empty() {
         let report = crate::core::verifier::verify_response_hybrid(&assistant_content, project, &files, grounding, show_verifier);
         if show_verifier {
             eprintln!("{} verifier: {} mentioned, {} invented, score {:.2}, hallucinated={} (mode={})",
@@ -545,6 +666,7 @@ pub async fn handle(
     global_provider: Option<ProviderKind>,
     global_url: Option<String>,
     global_lm_url: Option<String>,
+    mcp_servers: Vec<String>,
 ) -> Result<()> {
     let cfg = load_config().unwrap_or_default();
 
@@ -564,10 +686,14 @@ pub async fn handle(
         .unwrap_or_else(|| cfg.grounding.mode.clone());
 
     let project = projects::resolve_project(args.project.clone())?;
-    let model = resolve_model(args.model.clone(), &provider_kind, &provider_url, &cfg).await?;
+    let model = if args.route && args.model.is_none() {
+        route_model_verbose(&args.message, &provider_kind, &provider_url, &cfg, args.show_context).await?
+    } else {
+        resolve_model(args.model.clone(), &provider_kind, &provider_url, &cfg).await?
+    };
 
     if !args.message.trim().is_empty() {
-        chat_once(&model, &project, &args.message, args.no_context, args.show_context, args.show_verifier, args.no_verify, args.tools, !args.no_save, args.system.clone(), &grounding, provider_kind, provider_url).await?;
+        chat_once(&model, &project, &args.message, args.no_context, args.show_context, args.show_verifier, args.no_verify, args.tools, !args.no_save, args.system.clone(), &grounding, provider_kind, provider_url, &mcp_servers).await?;
         return Ok(());
     }
 
@@ -613,19 +739,19 @@ pub async fn handle(
             println!("history cleared");
             continue;
         }
-        if text.starts_with("/model ") {
-            let new_model = text[7..].trim().to_string();
+        if let Some(stripped) = text.strip_prefix("/model ") {
+            let new_model = stripped.trim().to_string();
             println!("model -> {}", new_model);
-            chat_once(&new_model, &hist, "", args.no_context, args.show_context, args.show_verifier, args.no_verify, args.tools, !args.no_save, args.system.clone(), &grounding, provider_kind.clone(), provider_url.clone()).await?;
+            chat_once(&new_model, &hist, "", args.no_context, args.show_context, args.show_verifier, args.no_verify, args.tools, !args.no_save, args.system.clone(), &grounding, provider_kind.clone(), provider_url.clone(), &mcp_servers).await?;
             continue;
         }
-        if text.starts_with("/grounding ") {
-            let ng = text[11..].trim().to_string();
+        if let Some(stripped) = text.strip_prefix("/grounding ") {
+            let ng = stripped.trim().to_string();
             println!("grounding -> {} (restart chat to apply)", ng);
             continue;
         }
         let current = if let Some(stored) = projects::find_project(&hist.id)? { stored } else { hist.clone() };
-        chat_once(&model, &current, text, args.no_context, args.show_context, args.show_verifier, args.no_verify, args.tools, !args.no_save, args.system.clone(), &grounding, provider_kind.clone(), provider_url.clone()).await?;
+        chat_once(&model, &current, text, args.no_context, args.show_context, args.show_verifier, args.no_verify, args.tools, !args.no_save, args.system.clone(), &grounding, provider_kind.clone(), provider_url.clone(), &mcp_servers).await?;
         if let Some(updated) = projects::find_project(&hist.id)? { hist = updated; }
         else if let Some(fp) = &hist.folder_path { if let Some(updated) = projects::find_project(fp)? { hist = updated; } }
     }
