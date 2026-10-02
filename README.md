@@ -1,90 +1,133 @@
-# Local AI
+# Local-AI — a local coding agent for your terminal
 
-A local AI-powered developer workspace for **local models + finetuning**. Now as a **cross-platform CLI** (Linux, macOS, Windows) — no GUI required.
+![Linux](https://img.shields.io/badge/OS-linux%20%7C%20macOS%20%7C%20Windows-blue)
+![Rust](https://img.shields.io/badge/Rust-1.77%2B-orange)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Local](https://img.shields.io/badge/inference-100%25%20local-brightgreen)
 
-Local AI helps developers understand, analyze, and modify projects using locally running AI models via LM Studio, with best-in-class finetuning (QLoRA) that exports directly to LM Studio.
+**Claude-Code-style terminal coding agent powered entirely by local models** — from small 7B models to 120B-class models. It understands your codebase, plans tasks, edits files, runs tests, verifies changes, and commits — all with local LLMs (LM Studio / Ollama / llama.cpp). Nothing ever leaves your machine.
 
-> **GUI (Tauri) deprecated** — see `cli/` for the CLI. The frontend remains in `frontend/` for reference but CLI is the primary interface.
+> Legacy Tauri GUI is deprecated — the CLI (`cli/`) is the product. `frontend/` + `src-tauri/` remain for reference only.
 
-## Features
-
-- **Plan / Build modes** — `plan` (read-only, can't build/write/exec via CLI, AI only plans) vs `build` (allow writes, default). Flag `--mode plan|build`, env `LOCAL_AI_MODE`, config `mode = "plan"`. Enforced in `core/config.rs:184` (`require_build_mode`). Plan still allows `exec`/`web_fetch` tools for reading.
-- **Browser + Terminal access** — model has `exec(command)` (terminal: `ls -R`, `cat`, `find`, `grep -rn`, `head` — reads all necessary files) and `web_fetch(url)` (browser: `https://` via `reqwest`, 10s timeout) via `--tools`. Offline core, but on-demand web when you enable tools. See `cli/README.md: Browser + Terminal`.
-- **Universal local models** — LM Studio (`:1234/v1`), Ollama (`:11434` native + `/v1` compat), llama.cpp (`:8080`), vLLM/Tabby/any OpenAI-compatible, auto-detect (Ollama → LM Studio → llama.cpp)
-- **Anti-hallucination 5 layers** — deterministic inventory router (no LLM), hybrid retrieval (0.55 cosine + 0.35 keyword), strict/balanced/creative prompts (0.2/0.4/0.7 temp), tool calling (`read_project_file`), post-generation verifier (lexical 0.76 F1 + `groundrails`/`LettuceDetect` 0.82/0.689)
-- Streaming AI responses + local model selection (unified `AIModel` with `provider` column)
-- Persistent projects + chat history (`projects.json` per OS data dir)
-- Hybrid retrieval (offline `fastembed` `bge-small-en-v1.5` 120MB 384 dim or `TfIdf` fallback, Ollama `nomic-embed-text` if up) — index `~/.cache/local-ai/<id>/index.json` chunk 1500/200
-- Project Intelligence (intent detection, relevant-file ranking, inventory header)
-- Real project-file reading + safe writing (path traversal protection) + exec (`sh -c`/`cmd /C`)
-- AI project analysis with citations + `analyze --dry-run` verifier preview
-- AI-generated file edits (`<CREATE_FILE>/<EDIT>/<DELETE>/<EXEC>`) with `SEARCH` verification
-- Integrated `doctor` + `config show|set` + `index rebuild|status` + `verify` (lexical + `finetune/verify.py` hybrid)
-
-## Quick Start (CLI)
-
-```bash
-# Install once — `local-ai` then works from any directory
-./install.sh   # → ~/.local/bin/local-ai (or: ./install.sh --system)
-
-# First launch walks through provider → model setup (saved globally).
-# Every later launch just prints ✓✓✓ and starts:
-local-ai
-
-# Attach a project and chat (auto-detects LM Studio or Ollama)
-local-ai project attach . --name MyApp
-local-ai models list                     # auto: Ollama -> LM Studio -> llama.cpp
-local-ai models list --provider ollama  # or --provider lmstudio --url http://localhost:1234/v1
-local-ai doctor                          # health_check all providers
-local-ai chat "explain this repo" --project MyApp --grounding strict --show-verifier
-local-ai analyze "what is the architecture?" --project MyApp --dry-run --show-verifier
-
-# Files & exec
-local-ai files list --project MyApp
-local-ai exec --project MyApp -- "npm test"
-
-# Hybrid retrieval (offline, 8GB safe)
-local-ai index rebuild --project MyApp   # fastembed or TfIdf, hybrid ranking
-local-ai index status --project MyApp
-
-# Finetune (RTX 5050 8GB: Unsloth QLoRA)
-local-ai finetune status
-local-ai finetune prepare --project ./my-app --out ./dataset.jsonl
-local-ai finetune train --base Qwen/Qwen2.5-7B-Instruct --dataset ./dataset.jsonl --dry-run
-```
-
-See `cli/README.md` and `finetune/README.md` for full docs.
-
-## Features (Detail)
-
-- CLI for all OS (single Rust binary, cross-platform)
-- Universal provider (`cli/src/core/provider/*` — `lmstudio.rs`, `ollama.rs`, `generic.rs`, trait `Provider`, `autodetect`, `config.toml`)
-- Project Intelligence (hybrid `fastembed` + keyword, intent detection, `intelligence.rs:202`)
-- Persistent projects (`projects.json` per OS data dir) + `index.json` cache per project
-- Path traversal protection, safe file writes, undo logic, `SEARCH` verification
-- Finetuning: Unsloth (2-5x faster, 5-6GB for 7B QLoRA on RTX 5050), MLX (Apple Silicon), Axolotl, torchtune — **finetuned model still goes through same verifier (does not bypass grounding)**
-- Prepare → Train → Merge → Quantize (GGUF) → Load in LM Studio
-- Legacy GUI: Tauri + React (in `frontend/` + `src-tauri/` — deprecated)
-
-## Architecture
+## The 60-second demo
 
 ```text
-Local AI
-├── cli/                 # Rust CLI (clap, tokio, reqwest) — PRIMARY
-│   ├── src/core/provider/ # lmstudio.rs (SSE), ollama.rs (NDJSON + /v1 compat), generic.rs, mod.rs (trait + autodetect)
-│   │   ├── config.rs     # ~/.config/local-ai/config.toml (ProviderKind, Grounding, Embeddings)
-│   │   ├── embeddings.rs # fastembed-rs 5.13 (bge-small 384 dim) + Ollama nomic-embed-text + TfIdf fallback
-│   │   ├── index.rs      # chunk 1500/200, blake3, flat JSON cosine (Qdrant/iQDB deferred)
-│   │   ├── intelligence.rs # detect_intent + rank_relevant_files + hybrid_rank (0.55 cosine + 0.35 keyword)
-│   │   ├── verifier.rs   # groundrails lexical + try_verify_with_python (groundrails+LettuceDetect) + symbol/edit checks
-│   │   └── tools.rs      # list_project_files, read_project_file, search_project (Ollama/LM Studio tools)
-│   ├── src/commands/     # chat.rs (router+prompt+verifier+retry), models.rs, analyze.rs, doctor.rs, config.rs, index.rs
-│   └── tests/            # hallucination.rs (groundrails/LettuceDetect scorer), providers.rs (mock SSE/NDJSON), rag.rs (fastembed/TfIdf)
-├── finetune/            # Python QLoRA pipelines (Unsloth/MLX/axolotl/torchtune)
-│   ├── train.py         # dispatched by `local-ai finetune train` — finetuned model still verified (no bypass)
-│   ├── verify.py        # groundrails + LettuceDetect v2-mmbert-base + ragground + groundlens hybrid (lexical fallback)
-│   ├── merge.py + quantize.py  # GGUF for LM Studio
-│   └── requirements.txt # datasets, transformers, peft, groundrails, lettucedetect, ragground, groundlens
-├── frontend/            # (legacy) React + Vite GUI — deprecated
-└── src-tauri/           # (legacy) Tauri backend — logic ported to cli/src/core
+$ cd my-project && local-ai "fix the PDF upload crash"
+
+🔍 Inspecting project — 85 files
+🧠 Ranked src/upload.py, tests/test_upload.py as relevant
+📋 Plan: reproduce → isolate → fix → re-test → review   [Approve ✓]
+✏️ Editing src/upload.py (+7 −7, diff preview shown)
+🧪 pytest → ❌ 1 failed (UnicodeDecodeError: 'utf-8' … byte 0xe2)
+🔧 Anchor-verified fix applied → 🧪 3/3 passed ✅
+🔐 Verifier: 0 invented files → ✅ Complete
+📦 Committed fce9028 (test gate green)
 ```
+
+Or open the fullscreen command center: `local-ai tui` — header HUD, anime sidekick with 17 states, streaming chat, live plan/tasks, project tree, permission modals with diffs, 6 themes.
+
+## Install
+
+One command — `local-ai` then works from any directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/manojkumar20081604-lang/Local-AI/main/install.sh | sh
+```
+
+Or locally (needs Rust ≥ 1.77 — https://rustup.rs):
+
+```bash
+git clone https://github.com/manojkumar20081604-lang/Local-AI.git
+cd Local-AI
+./install.sh              # → ~/.local/bin/local-ai (no sudo)
+./install.sh --system     # → /usr/local/bin/local-ai (needs sudo)
+./install.sh --uninstall  # remove it again
+# or: cargo install --path cli
+```
+
+If `~/.local/bin` isn't on your PATH (one time only):
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # bash
+fish_add_path ~/.local/bin                                  # fish
+```
+
+You need **one** local provider running: [Ollama](https://ollama.com) (`ollama serve && ollama pull qwen2.5`) or [LM Studio](https://lmstudio.ai) (enable Local Server).
+
+## First run
+
+```text
+$ local-ai
+No provider configured → pick LM Studio / Ollama / llama.cpp
+✓ Connected (health-checked, with retry)
+→ pick a model from the live list → saved globally
+✓ Provider / ✓ Model / ✓ Project detected
+◉ᴗ◉ Ready.
+```
+
+Every later launch just prints the three checkmarks. Change anytime with `/model`, `/provider`, `provider select`, or `models select`. Non-interactive setup: `local-ai init --provider ollama --model qwen3-coder` (or `local-ai config set provider ollama`). Diagnose everything with `local-ai doctor` (9 checks, CI-gateable exit code).
+
+## Commands
+
+| Area | Commands |
+|---|---|
+| Talk | `local-ai` (setup → TUI) · `local-ai "goal"` (agent loop) · `chat` (REPL + `--tools`) · `analyze` |
+| Build | `plan` / `exec-plan` · `agent run` · `mission` (persisted, resumable) · `debug` (self-debug loop) |
+| Safety | plan/build modes · diff preview + allow-once/session/reject · `git rollback` (stash checkpoints) |
+| Know | `index` (hybrid retrieval) · `graph` (symbols/imports) · `memory` (3 tiers) · `LOCAL-AI.md` conventions |
+| Ship | `git status/diff/log/blame` · AI `git commit` (test-gated) · `browse` (cited web research) · MCP (`filesystem`, `github`) |
+| Improve | `bench` (TPS/TTFT/pass@1) · `dataset collect` · `finetune eval` (deploy gate) · `metrics` · `propose` |
+| Setup | `init` · `provider list/select/test` · `models list/select` · `config` · `doctor` · `tui` |
+
+Full reference with examples: [`cli/README.md`](cli/README.md).
+
+## How it stays honest
+
+- **Grounded or silent** — every answer cites real files (`[path:line]`); strict mode exits `2` on hallucination instead of guessing.
+- **Never invents edits** — `SEARCH` anchors must match byte-for-byte or the op is refused; paths must exist in inventory; traversal blocked.
+- **Never destroys silently** — dangerous commands (`rm -rf /`, `mkfs`, exfil) need `--approve dangerous`; mutating runs snapshot first; verifier reject-rate is a tracked metric (`metrics`).
+- **Finetunes can't bypass grounding** — the verifier runs post-deploy on every model output; `finetune eval` blocks regressing adapters.
+
+## Layout
+
+```text
+Local-AI/
+├── install.sh        # one-command install (local build or curl-pipe remote)
+├── cli/              # PRIMARY — Rust binary (clap, tokio, ratatui)
+│   ├── src/core/     # provider/ (unified trait + autodetect) · config · setup
+│   │                 # intelligence · embeddings/index (hybrid RAG) · symbols
+│   │                 # verifier · edits (SEARCH-verified) · git (+checkpoints)
+│   │                 # agents (orchestrator) · missions · plan · debug
+│   │                 # memory · mcp · bench/dataset/metrics · router · ui_events
+│   ├── src/commands/ # chat/analyze/agent/mission/debug · files/exec · git
+│   │                 # plan · memory/graph/index · browse · bench/dataset
+│   │                 # metrics/propose · init/provider/models/doctor/config · tui
+│   ├── src/tui/      # anime engine · themes · ratatui app · agent bridge
+│   └── tests/        # 166 tests: agent/debug/git/hallucination/modes/phase3-5
+│                     # plan/providers/rag/repl/safety/setup/tui
+├── finetune/         # QLoRA pipelines (Unsloth/MLX/Axolotl/torchtune) + verify.py
+├── bench/            # benchmark prompt sets + results
+├── mcp/              # reference MCP servers (filesystem, github)
+├── plan.md           # full phased roadmap (all phases shipped)
+├── BENCHMARK.md      # benchmark notes
+└── frontend/ + src-tauri/  # legacy GUI (deprecated, reference only)
+```
+
+## Develop
+
+```bash
+cd cli
+cargo test                                        # 166 tests, all offline
+cargo clippy --all-targets -- -D warnings        # must stay clean
+./target/debug/local-ai doctor                    # end-to-end provider check
+```
+
+Config lives in `~/.config/local-ai/config.toml` (global — never inside projects). Project caches (index, traces, missions) live under `~/.cache/local-ai/`.
+
+## Roadmap
+
+Phases 1–5 (agent loop, orchestrator, RAG 2.0, missions/MCP, model lab), bare invocation, edit safety 2.0, anime TUI, and first-run productization are all shipped — see [`plan.md`](plan.md) for the full history and what's next.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Contributions welcome: keep `cargo test` + clippy green.
