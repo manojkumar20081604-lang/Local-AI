@@ -91,6 +91,11 @@ pub struct TuiOptions {
     pub no_animation: bool,
     pub ascii: bool,
     pub theme: Option<String>,
+    /// Session provider (e.g. launch auto-switch). Falls back to config.
+    pub provider_kind: Option<ProviderKind>,
+    pub provider_url: Option<String>,
+    /// Session model override (same precedence as `--model`).
+    pub model: Option<String>,
 }
 
 struct App {
@@ -151,9 +156,27 @@ pub async fn run(opts: TuiOptions) -> Result<()> {
 
     let proj = crate::core::projects::resolve_project(opts.project)?;
     let cfg = crate::core::config::load_config().unwrap_or_default();
-    let provider_kind = cfg.provider.active.clone();
-    let provider_url =
-        crate::core::config::resolve_provider_url(&provider_kind, &cfg, None, None);
+    // Session overrides (launch auto-switch, `tui --provider/--model`) win;
+    // otherwise the saved config applies as before.
+    let session_pinned = opts.provider_kind.is_some() || opts.provider_url.is_some();
+    let mut provider_kind = opts.provider_kind.unwrap_or_else(|| cfg.provider.active.clone());
+    let mut provider_url = opts.provider_url.unwrap_or_else(|| {
+        crate::core::config::resolve_provider_url(&provider_kind, &cfg, None, None)
+    });
+    // Model–provider binding (same rule as launch): without a session
+    // override, a bound saved model moves the session to its home.
+    let mut binding_note: Option<String> = None;
+    if !session_pinned {
+        if let Some((home, saved)) = crate::core::setup::model_home(&cfg) {
+            if home != provider_kind {
+                provider_url =
+                    crate::core::config::resolve_provider_url(&home, &cfg, None, None);
+                provider_kind = home.clone();
+                binding_note =
+                    Some(format!("model '{}' belongs to {} — switched for this session", saved, home));
+            }
+        }
+    }
     let caps = theme::detect_caps(opts.ascii, opts.no_animation);
     let mut app_theme = match opts.theme.as_deref() {
         Some(name) => theme::builtin(name),
@@ -171,7 +194,7 @@ pub async fn run(opts: TuiOptions) -> Result<()> {
         provider_kind,
         provider_url,
         model: None,
-        model_override: None,
+        model_override: opts.model,
         theme: app_theme,
         theme_idx: 0,
         caps,
@@ -220,7 +243,7 @@ pub async fn run(opts: TuiOptions) -> Result<()> {
     if !opts.no_animation {
         startup_animation(&mut terminal, &app).await?;
     }
-    startup_checks(&mut app).await;
+    startup_checks(&mut app, binding_note).await;
     greet(&mut app);
 
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
@@ -304,19 +327,34 @@ async fn startup_animation(
     Ok(())
 }
 
-async fn startup_checks(app: &mut App) {
+async fn startup_checks(app: &mut App, binding_note: Option<String>) {
+    if let Some(note) = binding_note {
+        push_sys(app, note);
+    }
     // Model.
     let cfg = crate::core::config::load_config().unwrap_or_default();
     match crate::core::provider::list_models_unified(&app.provider_kind, &app.provider_url, &cfg).await
     {
         Ok(models) if !models.is_empty() => {
-            app.model = Some(models[0].id.clone());
+            let ids = models.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+            let picked = crate::core::provider::pick_model(None, cfg.model.as_deref(), &ids)
+                .unwrap_or(models[0].id.clone());
+            app.model = Some(picked.clone());
             push_sys(
                 app,
-                format!("✓ Model connected ({} via {})", models[0].id, app.provider_kind),
+                format!("✓ Model connected ({} via {})", picked, app.provider_kind),
             );
         }
-        _ => push_sys(app, "○ No model reachable — Q&A and coder steps will wait for one".into()),
+        _ => {
+            // Keep the truthful header: show the configured model even while
+            // unreachable (corrected by ModelSwitch once something resolves).
+            if let Some(saved) = cfg.model.clone() {
+                app.model = Some(saved.clone());
+                push_sys(app, format!("○ No model reachable — saved '{}' kept (start {})", saved, app.provider_kind));
+            } else {
+                push_sys(app, "○ No model reachable — Q&A and coder steps will wait for one".into());
+            }
+        }
     }
     // Project.
     app.files = core_fs::list_project_files(&app.proj).unwrap_or_default();
@@ -453,6 +491,13 @@ fn apply_event(app: &mut App, ev: UiEvent) {
                 app.messages.push(ChatLine { role: "ai", text });
             }
             app.pending_answer.clear();
+        }
+        UiEvent::ModelSwitch { model, provider } => {
+            app.model = Some(model.clone());
+            if let Ok(kind) = provider.parse::<ProviderKind>() {
+                app.provider_kind = kind;
+            }
+            touch(app);
         }
         UiEvent::AnswerStart { .. } => {
             app.pending_answer.clear();
@@ -974,7 +1019,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let line = Line::from(vec![
         Span::styled(" LOCAL-AI ", Style::default().fg(app.theme.header).add_modifier(Modifier::BOLD)),
         Span::styled(
-            format!(" {} │ 128K │ ● LOCAL │ {} │ {}% ", model, app.branch, pct),
+            format!(" {} │ {} ● LOCAL │ {} │ {}% ", model, app.provider_kind, app.branch, pct),
             Style::default().fg(app.theme.muted),
         ),
     ]);

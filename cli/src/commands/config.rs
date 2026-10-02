@@ -41,7 +41,7 @@ pub async fn handle(args: ConfigArgs) -> Result<()> {
             match v {
                 Some(val) => println!("{}", val),
                 None => {
-                    eprintln!("Unknown key '{}'. Try: mode, provider.active, model, providers.ollama.url, providers.lmstudio.url, grounding.mode", key);
+                    eprintln!("Unknown key '{}'. Try: mode, provider.active, model, model.provider, providers.ollama.url, providers.lmstudio.url, grounding.mode", key);
                     std::process::exit(1);
                 }
             }
@@ -71,6 +71,7 @@ fn get_key(cfg: &AppConfig, key: &str) -> Option<String> {
         "provider.active" => Some(cfg.provider.active.to_string()),
         "provider.url" => Some(cfg.provider.url.clone().unwrap_or_default()),
         "model" => Some(cfg.model.clone().unwrap_or_default()),
+        "model.provider" => Some(cfg.model_provider.as_ref().map(|p| p.to_string()).unwrap_or_default()),
         "providers.lmstudio.url" => Some(cfg.providers.lmstudio.url.clone()),
         "providers.ollama.url" => Some(cfg.providers.ollama.url.clone()),
         "providers.llamacpp.url" => Some(cfg.providers.llamacpp.url.clone()),
@@ -98,6 +99,17 @@ fn set_key(cfg: &mut AppConfig, key: &str, value: &str) -> Result<()> {
         }
         "model" => {
             cfg.model = if value.is_empty() { None } else { Some(value.to_string()) };
+            if cfg.model.is_none() {
+                cfg.model_provider = None;
+            }
+        }
+        "model.provider" => {
+            if value.is_empty() {
+                cfg.model_provider = None;
+            } else {
+                let k: ProviderKind = value.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+                cfg.model_provider = Some(k);
+            }
         }
         "providers.lmstudio.url" => cfg.providers.lmstudio.url = value.to_string(),
         "providers.ollama.url" => cfg.providers.ollama.url = value.to_string(),
@@ -114,7 +126,7 @@ fn set_key(cfg: &mut AppConfig, key: &str, value: &str) -> Result<()> {
         }
         "embeddings.provider" => cfg.embeddings.provider = value.to_string(),
         "embeddings.model" => cfg.embeddings.model = value.to_string(),
-        _ => anyhow::bail!("Unknown key '{}'. Valid: mode, provider.active, model, provider.url, providers.{{lmstudio,ollama,llamacpp,generic}}.url, grounding.*, embeddings.*", key),
+        _ => anyhow::bail!("Unknown key '{}'. Valid: mode, provider.active, model, model.provider, provider.url, providers.{{lmstudio,ollama,llamacpp,generic}}.url, grounding.*, embeddings.*", key),
     }
     Ok(())
 }

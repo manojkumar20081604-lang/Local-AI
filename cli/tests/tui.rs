@@ -86,14 +86,16 @@ fn test_every_event_maps_without_panic() {
         ev::UiEvent::Review { passed: false, summary: "s".into() },
         ev::UiEvent::AnswerStart { query: "q".into() },
         ev::UiEvent::ModelDone { full: "f".into() },
+        ev::UiEvent::ModelSwitch { model: "m".into(), provider: "ollama".into() },
         ev::UiEvent::AgentComplete { green: true, summary: "s".into() },
     ];
     for ev in &events {
         let _ = anime::state_for_event(ev);
     }
-    // Log/Warn never steal the character.
+    // Log/Warn never steal the character; ModelSwitch only retitles the header.
     assert!(anime::state_for_event(&events[0]).is_none());
     assert!(anime::state_for_event(&events[1]).is_none());
+    assert!(anime::state_for_event(&ev::UiEvent::ModelSwitch { model: "m".into(), provider: "ollama".into() }).is_none());
 }
 
 #[test]

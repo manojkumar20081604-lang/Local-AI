@@ -119,6 +119,8 @@ local-ai provider select --name ollama          # switch provider (re-checks sav
 local-ai provider test --name lmstudio          # connectivity + model list
 local-ai models select --id qwen2.5:1.5b        # pin the default model (flags still win)
 local-ai config set model qwen2.5:1.5b          # same thing, script-friendly
+# Models are bound to their provider: launches auto-switch to the model's
+# home (session-only); `provider select` re-checks or clears a stale binding.
 local-ai doctor                                 # 9 checks: install/PATH/config/provider/model/project/git/terminal/tools
 
 # Models — universal provider (LM Studio + Ollama + llama.cpp + any OpenAI-compatible)

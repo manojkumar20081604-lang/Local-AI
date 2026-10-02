@@ -44,29 +44,38 @@ pub async fn handle(args: InitArgs) -> Result<()> {
     Ok(())
 }
 
-/// Bare `local-ai` launch: banner → first-run setup (once) → 3-line
-/// summary → TUI. Second launches never ask again (`/model`, `/provider`
-/// in the TUI or `provider select` / `models select` to change).
+/// Bare `local-ai` launch: banner → first-run setup (once) → provider
+/// ask (until pinned) → summary → TUI. The session provider (including any
+/// model-home auto-switch) rides into the TUI; nothing is persisted behind
+/// the user's back.
 pub async fn launch() -> Result<()> {
+    use crate::core::config::ProviderKind;
     if !console::user_attended() {
         anyhow::bail!("No interactive terminal — use subcommands (e.g. `local-ai chat \"hi\"`) or `local-ai init --provider ollama --model <id>`");
     }
-    if setup::is_first_run() {
-        setup::run_wizard().await?;
+    let kind = if setup::is_first_run() {
+        setup::run_wizard().await?.kind
     } else {
-        print_summary().await;
-    }
+        print_summary().await
+    };
+    // Carry the session provider (incl. model-home auto-switch) into the
+    // TUI; Auto re-resolves there exactly as before.
+    let session_provider =
+        if kind == ProviderKind::Auto { None } else { Some(kind.to_string()) };
     super::tui::handle(super::tui::TuiArgs {
         project: None,
         no_animation: false,
         ascii: false,
         theme: None,
+        provider: session_provider,
+        model: None,
     })
     .await
 }
 
 /// Repeat-launch summary: provider ✓, model ✓ (or inline select), project ✓.
-async fn print_summary() {
+/// Returns the session provider kind for the TUI handoff.
+async fn print_summary() -> ProviderKind {
     use console::style;
     use crate::core::config::{load_config, ProviderKind};
 
@@ -97,6 +106,40 @@ async fn print_summary() {
         }
     }
 
+    // Model–provider binding: a saved model that belongs elsewhere moves the
+    // launch to its home (session-only — pinned providers keep authority and
+    // `auto` keeps asking next time).
+    let (kind, url, up) = match setup::model_home(&cfg) {
+        Some((home, saved)) if home != kind => {
+            if cfg.provider.active != ProviderKind::Auto {
+                println!(
+                    "{} saved model '{}' belongs to {} — pinned {} keeps this launch (re-pick: `local-ai models select`)",
+                    style("!").yellow(),
+                    saved,
+                    home,
+                    kind
+                );
+                (kind, url, up)
+            } else {
+                let u = crate::core::config::resolve_provider_url(&home, &cfg, None, None);
+                let ok = setup::test_connection(&home, &u).await;
+                if ok {
+                    println!("{} model '{}' belongs to {} — switched for this launch", style("→").dim(), saved, home);
+                } else {
+                    println!(
+                        "{} model '{}' belongs to {} (down at {}) — start it or pick another model",
+                        style("!").yellow(),
+                        saved,
+                        home,
+                        u
+                    );
+                }
+                (home.clone(), u, ok)
+            }
+        }
+        _ => (kind, url, up),
+    };
+
     // Model: saved-and-listed wins; otherwise pick inline once and save it.
     let models = if up {
         crate::core::provider::list_models_unified(&kind, &url, &cfg)
@@ -121,6 +164,7 @@ async fn print_summary() {
         _ => match pick_model_launch(&models) {
             Some(m) => {
                 cfg.model = Some(m.clone());
+                cfg.model_provider = if kind == ProviderKind::Auto { None } else { Some(kind.clone()) };
                 let _ = crate::core::config::save_config(&cfg);
                 println!("{} {}", style("✓").green(), m);
             }
@@ -142,6 +186,7 @@ async fn print_summary() {
         Err(_) => println!("{} no project here (TUI still works — attach one with `project attach`)", style("→").dim()),
     }
     println!("\n      ◉ᴗ◉  Ready.\n");
+    kind
 }
 
 /// Model question for launch: live list when the provider is up, manual

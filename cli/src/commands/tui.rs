@@ -29,14 +29,29 @@ pub struct TuiArgs {
     /// Theme: midnight|cyberpunk|anime|matrix|monochrome|minimal|custom
     #[arg(long)]
     pub theme: Option<String>,
+
+    /// Provider override for this session (auto|lmstudio|ollama|llamacpp|generic)
+    #[arg(long)]
+    pub provider: Option<String>,
+
+    /// Model override for this session
+    #[arg(long)]
+    pub model: Option<String>,
 }
 
 pub async fn handle(args: TuiArgs) -> Result<()> {
+    let provider_kind = match args.provider {
+        Some(p) => Some(p.parse().map_err(|e: String| anyhow::anyhow!(e))?),
+        None => None,
+    };
     crate::tui::app::run(crate::tui::app::TuiOptions {
         project: args.project,
         no_animation: args.no_animation,
         ascii: args.ascii,
         theme: args.theme,
+        provider_kind,
+        provider_url: None,
+        model: args.model,
     })
     .await
 }

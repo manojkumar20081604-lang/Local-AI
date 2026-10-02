@@ -78,9 +78,31 @@ pub async fn list_models(kind: &ProviderKind, url: &str) -> Vec<String> {
     }
 }
 
+/// The saved model's home provider, when a binding applies:
+/// a saved model bound to a concrete provider different from `active`.
+/// Callers switch session-scoped (never persist); pinned providers keep
+/// authority and get a mismatch warning instead.
+pub fn model_home(cfg: &AppConfig) -> Option<(ProviderKind, String)> {
+    let home = cfg.model_provider.clone()?;
+    if home == ProviderKind::Auto {
+        return None;
+    }
+    let saved = cfg.model.clone()?;
+    if home == cfg.provider.active {
+        return None;
+    }
+    Some((home, saved))
+}
+
 /// Persist provider (+ optional model). Never touches projects.
+/// A saved model is bound to its provider (`model_provider`), so later
+/// launches can switch back to the model's home instead of asking the
+/// wrong backend. `Auto` never binds (nothing concrete to bind to).
 pub fn save_selection(kind: ProviderKind, model: Option<String>) -> Result<()> {
     let mut cfg = load_config().unwrap_or_default();
+    cfg.model_provider = model
+        .as_ref()
+        .and_then(|_| if kind == ProviderKind::Auto { None } else { Some(kind.clone()) });
     cfg.provider.active = kind;
     cfg.model = model;
     save_config(&cfg)

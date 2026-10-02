@@ -147,6 +147,11 @@ async fn handle_select(id: Option<String>, cfg: &AppConfig) -> Result<()> {
     };
     let mut updated = cfg.clone();
     updated.model = Some(chosen.clone());
+    // Bind the model to the provider that listed it (best-effort parse).
+    updated.model_provider = models
+        .iter()
+        .find(|m| m.id == chosen)
+        .and_then(|m| m.provider.parse().ok());
     save_config(&updated)?;
     println!("{} default model → {}", style("✓").green(), style(chosen).cyan());
     Ok(())

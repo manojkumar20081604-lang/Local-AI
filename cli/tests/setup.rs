@@ -88,6 +88,12 @@ fn test_first_run_and_save_selection_isolated() {
         let cfg = local_ai::core::config::load_config().unwrap();
         assert_eq!(cfg.provider.active, ProviderKind::Ollama);
         assert_eq!(cfg.model.as_deref(), Some("qwen3-coder"));
+        // The model is bound to the provider it was picked from.
+        assert_eq!(cfg.model_provider, Some(ProviderKind::Ollama));
+        // Auto never binds (nothing concrete to bind to).
+        setup::save_selection(ProviderKind::Auto, None).unwrap();
+        let cfg = local_ai::core::config::load_config().unwrap();
+        assert!(cfg.model_provider.is_none());
         // Clearing the model keeps the provider (launch re-picks inline).
         setup::save_selection(ProviderKind::Ollama, None).unwrap();
         let cfg = local_ai::core::config::load_config().unwrap();
@@ -104,4 +110,27 @@ fn test_provider_options_cover_big_three() {
     assert!(kinds.contains(&ProviderKind::LmStudio));
     assert!(kinds.contains(&ProviderKind::Ollama));
     assert!(kinds.contains(&ProviderKind::LlamaCpp));
+}
+
+#[test]
+fn test_model_home_binding_rules() {
+    use local_ai::core::setup::model_home;
+    let mut cfg = local_ai::core::config::default_config();
+    // Nothing saved → no binding.
+    assert!(model_home(&cfg).is_none());
+    // Saved model without provider → unbound (works anywhere).
+    cfg.model = Some("qwen".into());
+    assert!(model_home(&cfg).is_none());
+    // Bound elsewhere, active is auto → switch.
+    cfg.model_provider = Some(ProviderKind::LmStudio);
+    let (home, saved) = model_home(&cfg).expect("binding applies");
+    assert_eq!(home, ProviderKind::LmStudio);
+    assert_eq!(saved, "qwen");
+    // Bound to the active provider → no-op.
+    cfg.provider.active = ProviderKind::LmStudio;
+    assert!(model_home(&cfg).is_none());
+    // Auto binding never applies.
+    cfg.provider.active = ProviderKind::Auto;
+    cfg.model_provider = Some(ProviderKind::Auto);
+    assert!(model_home(&cfg).is_none());
 }

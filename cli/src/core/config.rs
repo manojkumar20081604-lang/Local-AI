@@ -144,6 +144,11 @@ pub struct AppConfig {
     /// Explicit `--model` flags always win over this.
     #[serde(default)]
     pub model: Option<String>,
+    /// Which provider the saved model belongs to (`None` = any provider).
+    /// Recorded at select time so a stale `auto` launch can switch to the
+    /// model's home instead of asking the wrong backend to serve it.
+    #[serde(default)]
+    pub model_provider: Option<ProviderKind>,
     #[serde(default)]
     pub providers: ProvidersConfig,
     #[serde(default)]
@@ -195,6 +200,7 @@ pub fn default_config() -> AppConfig {
         mode: AppMode::Build,
         provider: ProviderSection { active: ProviderKind::Auto, url: None },
         model: None,
+        model_provider: None,
         providers: ProvidersConfig {
             lmstudio: ProviderConfig { url: "http://localhost:1234/v1".to_string(), use_openai_compat: false },
             ollama: ProviderConfig { url: "http://localhost:11434".to_string(), use_openai_compat: false },

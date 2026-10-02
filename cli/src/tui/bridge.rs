@@ -59,6 +59,11 @@ pub async fn run_goal(
     let model: Option<String> =
         provider::resolve_model_id(model_override, provider_kind, provider_url, &cfg).await;
 
+    ui_events::emit(ui_events::UiEvent::ModelSwitch {
+        model: model.clone().unwrap_or_else(|| "(none)".into()),
+        provider: provider_kind.to_string(),
+    });
+
     let mut orch = core_agents::Orchestrator::new(
         mission_id.clone(),
         budget.clone(),
@@ -137,6 +142,10 @@ pub async fn answer_once(
     let Some(model_id) = model else {
         anyhow::bail!("No model reachable — start Ollama or LM Studio first")
     };
+    ui_events::emit(ui_events::UiEvent::ModelSwitch {
+        model: model_id.clone(),
+        provider: provider_kind.to_string(),
+    });
 
     let system = format!(
         "You are Local AI, a grounded coding assistant. Use ONLY the project context. Be concise.\n\n{}",
@@ -171,6 +180,10 @@ pub async fn answer_once(
                         "Model '{}' isn't servable here — falling back to '{}' (pin it: /model {}).",
                         model_id, fb, fb
                     ),
+                });
+                ui_events::emit(ui_events::UiEvent::ModelSwitch {
+                    model: fb.clone(),
+                    provider: provider_kind.to_string(),
                 });
                 provider::stream_chat_unified(provider_kind, provider_url, &cfg, &fb, messages, 0.4, &mut sink)
                     .await

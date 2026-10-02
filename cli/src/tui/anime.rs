@@ -70,6 +70,7 @@ pub fn state_for_event(event: &UiEvent) -> Option<AnimeState> {
         }
         UiEvent::AnswerStart { .. } => Some(AnimeState::Thinking),
         UiEvent::ModelDone { .. } => Some(AnimeState::Idle),
+        UiEvent::ModelSwitch { .. } => None,
         UiEvent::AgentComplete { green, .. } => {
             Some(if *green { AnimeState::Excited } else { AnimeState::Confused })
         }

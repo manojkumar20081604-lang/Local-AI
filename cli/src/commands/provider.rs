@@ -110,6 +110,10 @@ async fn handle_select(name: Option<String>) -> Result<()> {
                 kind
             );
             cfg.model = None;
+            cfg.model_provider = None;
+        } else {
+            // Kept: rebind it to the new home provider.
+            cfg.model_provider = Some(kind.clone());
         }
     }
     let url = crate::core::config::resolve_provider_url(&kind, &cfg, None, None);
