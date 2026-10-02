@@ -74,24 +74,27 @@ async fn print_summary() {
 
     // Provider: a pinned provider is used silently; `auto` (never chose)
     // asks every launch — reachable ones first, current default marked.
-    let (kind, url, up) = if cfg.provider.active == ProviderKind::Auto {
+    // (The ask path reports its own status; the pinned path reports here.)
+    let (kind, url, up, asked) = if cfg.provider.active == ProviderKind::Auto {
         match ask_provider(&cfg).await {
-            Some((k, u, ok)) => (k, u, ok),
+            Some((k, u, ok)) => (k, u, ok, true),
             None => {
                 let (k, u, ok) = crate::core::provider::autodetect(&cfg).await;
-                (k, u, ok)
+                (k, u, ok, true)
             }
         }
     } else {
         let u = crate::core::config::resolve_provider_url(&cfg.provider.active, &cfg, None, None);
         let up = setup::test_connection(&cfg.provider.active, &u).await;
-        (cfg.provider.active.clone(), u, up)
+        (cfg.provider.active.clone(), u, up, false)
     };
-    if up {
-        println!("{} {}", style("✓").green(), kind);
-    } else {
-        println!("{} {} — not running.", style("!").yellow(), kind);
-        println!("  Start LM Studio (:1234, enable Local Server) or Ollama (`ollama serve`), then press on — continuing offline-capable.");
+    if !asked {
+        if up {
+            println!("{} {}", style("✓").green(), kind);
+        } else {
+            println!("{} {} — not running.", style("!").yellow(), kind);
+            println!("  Start LM Studio (:1234, enable Local Server) or Ollama (`ollama serve`), then press on — continuing offline-capable.");
+        }
     }
 
     // Model: saved-and-listed wins; otherwise pick inline once and save it.
@@ -106,26 +109,26 @@ async fn print_summary() {
         Vec::new()
     };
     match (&cfg.model.clone(), models.first()) {
-        (Some(saved), _) if models.iter().any(|m| m == saved) => {
-            println!("{} {}", style("✓").green(), saved);
+        // Saved model verified live, or kept on trust when offline.
+        (Some(saved), _) if models.is_empty() || models.iter().any(|m| m == saved) => {
+            println!(
+                "{} {}{}",
+                style("✓").green(),
+                saved,
+                if models.is_empty() { " (unverified — provider down)" } else { "" }
+            );
         }
-        _ if !models.is_empty() => {
-            let labels = models.clone();
-            let pick = dialoguer::Select::new()
-                .with_prompt("Model (saved for next launch)")
-                .items(&labels)
-                .default(0)
-                .interact_opt()
-                .unwrap_or(None);
-            if let Some(i) = pick {
-                cfg.model = Some(models[i].clone());
+        _ => match pick_model_launch(&models) {
+            Some(m) => {
+                cfg.model = Some(m.clone());
                 let _ = crate::core::config::save_config(&cfg);
-                println!("{} {}", style("✓").green(), models[i]);
-            } else {
+                println!("{} {}", style("✓").green(), m);
+            }
+            None if !models.is_empty() => {
                 println!("{} using {} (not saved)", style("→").dim(), models[0]);
             }
-        }
-        _ => println!("{} no models listed", style("→").dim()),
+            None => println!("{} no model saved", style("→").dim()),
+        },
     }
 
     // Project: current directory.
@@ -141,6 +144,39 @@ async fn print_summary() {
     println!("\n      ◉ᴗ◉  Ready.\n");
 }
 
+/// Model question for launch: live list when the provider is up, manual
+/// entry when it is down (or bare). Returns the id to save, or `None` to
+/// skip. Never fails the launch — the TUI always opens.
+fn pick_model_launch(models: &[String]) -> Option<String> {
+    if models.is_empty() {
+        let typed: String = dialoguer::Input::new()
+            .with_prompt("Model id (empty to skip — TUI still opens)")
+            .interact_text()
+            .unwrap_or_default();
+        let typed = typed.trim().to_string();
+        return if typed.is_empty() { None } else { Some(typed) };
+    }
+    let mut items = models.to_vec();
+    items.push("⌨  Type it manually".to_string());
+    match dialoguer::Select::new()
+        .with_prompt("Model (saved for next launch)")
+        .items(&items)
+        .default(0)
+        .interact_opt()
+        .unwrap_or(None)?
+    {
+        i if i < models.len() => Some(models[i].clone()),
+        _ => {
+            let typed: String = dialoguer::Input::new()
+                .with_prompt("Model id")
+                .interact_text()
+                .unwrap_or_default();
+            let typed = typed.trim().to_string();
+            if typed.is_empty() { None } else { Some(typed) }
+        }
+    }
+}
+
 /// Ask which provider to use for this launch. Returns `None` when the user
 /// backs out (caller falls back to autodetect). Reachable providers sort
 /// first; Esc keeps the old silent behavior.
@@ -151,17 +187,24 @@ async fn ask_provider(
 
     let options = setup::provider_options(cfg);
     // Reachability per row so the choice is informed, not a guess.
-    let mut rows: Vec<(bool, String)> = Vec::new();
+    // Aligned columns: name, endpoint, status word.
+    let mut ups: Vec<bool> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
     for opt in &options {
         let up = setup::test_connection(&opt.kind, &opt.url).await;
-        rows.push((up, format!("{}  {}  {}", opt.label, opt.url, if up { "●" } else { "○" })));
+        ups.push(up);
+        labels.push(format!(
+            "{:<12} {:<28} {}",
+            opt.label,
+            opt.url,
+            if up { "● reachable" } else { "○ down" }
+        ));
     }
     // Default to the first reachable provider.
-    let default = rows.iter().position(|(up, _)| *up).unwrap_or(0);
+    let default = ups.iter().position(|up| *up).unwrap_or(0);
     println!("\n{}", style("Select provider for this launch:").bold());
-    let labels: Vec<String> = rows.into_iter().map(|(_, l)| l).collect();
     let pick = dialoguer::Select::new()
-        .with_prompt("Provider (pin one forever: `local-ai provider select --name <id>`)")
+        .with_prompt("Provider (pin: `local-ai provider select --name <id>`)")
         .items(&labels)
         .default(default)
         .interact_opt()
