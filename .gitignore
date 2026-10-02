@@ -9,6 +9,7 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+backend/.venv/
 finetune/.venv/
 outputs/
 *.egg-info/
@@ -34,3 +35,12 @@ lora-adapter/
 
 # Logs
 *.log
+
+# Repo hygiene (Phase 0) — never commit generated junk
+backup/
+backups/
+test-*.txt
+*.backup
+*.backup.*
+*-backup
+*.stage*.backup
