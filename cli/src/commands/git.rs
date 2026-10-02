@@ -63,6 +63,14 @@ pub enum GitCommands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Restore the newest local-ai checkpoint (stash pop; build-gated)
+    Rollback {
+        #[arg(long)]
+        project: Option<String>,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Commit staged changes (build-gated; preview with --dry-run)
     Commit {
         #[arg(long)]
@@ -188,6 +196,28 @@ pub async fn handle(args: GitArgs) -> Result<()> {
         }
         GitCommands::Commit { project, message, dry_run, test_cmd, yes } => {
             handle_commit(project, message, dry_run, test_cmd, yes).await?;
+        }
+        GitCommands::Rollback { project, yes } => {
+            // Unlike the rest of `git` (read-only), rollback rewrites the tree.
+            crate::core::config::require_build_mode("git rollback")?;
+            let proj = projects::resolve_project(project)?;
+            if !yes {
+                let ok = dialoguer::Confirm::new()
+                    .with_prompt("Restore the newest local-ai checkpoint (uncommitted work may conflict)?")
+                    .default(false)
+                    .interact_opt()?;
+                if !ok.unwrap_or(false) {
+                    println!("{} rollback cancelled — nothing changed", style("✗").red());
+                    return Ok(());
+                }
+            }
+            match crate::core::git::rollback_checkpoint(&proj) {
+                Ok(msg) => println!("{} {}", style("✓").green(), msg),
+                Err(e) => {
+                    eprintln!("{} {}", style("✗").red(), e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
     Ok(())

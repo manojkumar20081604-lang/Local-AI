@@ -53,7 +53,8 @@ async fn main() -> anyhow::Result<()> {
         std::env::set_var("LOCAL_AI_PROVIDER", k.to_string());
     }
 
-    match cli.command {
+    match (cli.command, cli.prompt) {
+        (Some(cmd), _) => match cmd {
         Commands::Project(cmd) => commands::project::handle(cmd).await?,
         Commands::Models(cmd) => commands::models::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone()).await?,
         Commands::Chat(cmd) => commands::chat::handle(cmd, cli_provider_kind, cli.url.clone(), cli.lm_studio_url.clone(), cli.mcp.clone()).await?,
@@ -77,6 +78,61 @@ async fn main() -> anyhow::Result<()> {
         Commands::Dataset(cmd) => commands::dataset::handle(cmd).await?,
         Commands::Metrics(cmd) => commands::metrics::handle(cmd).await?,
         Commands::Propose(cmd) => commands::propose::handle(cmd).await?,
+        },
+        // Bare `local-ai "fix the crash"` → agent loop in the current directory.
+        // Same foreground, bounded, approval-gated engine as `agent run`.
+        (None, Some(prompt)) => {
+            eprintln!("No command given — running agent for: {}", prompt);
+            commands::agent::handle(
+                commands::agent::AgentArgs {
+                    command: commands::agent::AgentCommands::Run {
+                        goal: prompt,
+                        project: None,
+                        max_steps: 20,
+                        max_tool_calls: 50,
+                        max_wall_secs: 600,
+                        test_cmd: None,
+                        model: None,
+                        provider: None,
+                        dry_run: false,
+                        yes: false,
+                        approve: Vec::new(),
+                    },
+                },
+                cli_provider_kind,
+                cli.url.clone(),
+                cli.lm_studio_url.clone(),
+            )
+            .await?
+        }
+        // Bare `local-ai` → interactive chat REPL in the current directory.
+        (None, None) => {
+            eprintln!("No command given — opening chat in current directory (type /exit to quit)");
+            commands::chat::handle(
+                commands::chat::ChatArgs {
+                    message: String::new(),
+                    model: None,
+                    project: None,
+                    no_context: false,
+                    no_save: false,
+                    system: None,
+                    show_context: false,
+                    grounding: None,
+                    provider: None,
+                    url: None,
+                    show_verifier: false,
+                    no_verify: false,
+                    verify_only: false,
+                    tools: false,
+                    route: false,
+                },
+                cli_provider_kind,
+                cli.url.clone(),
+                cli.lm_studio_url.clone(),
+                cli.mcp.clone(),
+            )
+            .await?
+        }
     }
 
     // Avoid unused warning for load_config import

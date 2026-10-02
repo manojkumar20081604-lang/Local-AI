@@ -243,3 +243,29 @@ pub fn require_build_mode(action: &str) -> anyhow::Result<()> {
 pub fn current_mode() -> AppMode {
     if is_plan_mode() { AppMode::Plan } else { AppMode::Build }
 }
+
+// --- Approval tiers (P1b): allow-once vs allow-for-session ---
+//
+// The agent/edit loop asks before writes and test execs. Answering
+// "allow for session" sets `LOCAL_AI_APPROVE_SESSION=1` for the rest of
+// the process so later prompts auto-approve; "allow once" approves only
+// that prompt; "reject" refuses it. `--yes` still skips everything.
+// Process-global by design: a session never leaks into the next run.
+
+/// `true` when "allow for session" was picked earlier in this process.
+pub fn session_approved() -> bool {
+    matches!(
+        std::env::var("LOCAL_AI_APPROVE_SESSION").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+/// Record "allow for session" for the rest of this process.
+pub fn approve_session() {
+    std::env::set_var("LOCAL_AI_APPROVE_SESSION", "1");
+}
+
+/// Clear a session approval (used by tests; sessions never persist).
+pub fn clear_session_approval() {
+    std::env::remove_var("LOCAL_AI_APPROVE_SESSION");
+}

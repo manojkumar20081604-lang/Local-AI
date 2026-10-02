@@ -118,6 +118,8 @@ local-ai config show                              # dump merged config + autodet
 local-ai config set provider.ollama.url http://localhost:11434
 
 # Chat (streaming, project-aware, grounded, saves to projects.json)
+local-ai                                        # bare: REPL in current dir (same as below)
+local-ai "fix the PDF crash"                    # bare: agent loop in current dir (approval-gated)
 local-ai chat "explain the auth flow" --project MyApp --model qwen/qwen3.5-9b
 local-ai chat --project MyApp                     # interactive REPL (/help, /clear, /history, /model, /grounding)
 local-ai chat "what is the architecture?" --show-context --show-verifier --grounding strict
@@ -138,6 +140,9 @@ local-ai git blame --project MyApp --file src/x.rs --lines 10,40
 local-ai git branches --project MyApp
 local-ai git commit --project MyApp --dry-run   # changeset preview (no commit)
 local-ai git commit --project MyApp --yes       # build-gated, approval-gated, optional --test-cmd gate
+local-ai git rollback --project MyApp --yes     # restore newest local-ai checkpoint (stash pop; build-gated)
+# Checkpoints: agent/debug runs stash the dirty tree first (tracked + untracked);
+# rollback restores it. No repo or clean tree → checkpoint skipped with a notice.
 
 # Plan Mode 2.0 — approvable execution graphs (read-only)
 local-ai plan "add JWT auth" --project MyApp            # human view + saves to cache
@@ -148,6 +153,8 @@ local-ai exec-plan ./plans/add-jwt-auth-<ts>.json --yes --project MyApp  # build
 # Self-debugging loop (build-gated; --dry-run previews)
 local-ai debug "fix failing tests" --project MyApp --max-attempts 3
 local-ai debug --project MyApp --test-cmd "npm test" --yes
+# Every proposed edit shows a unified-diff preview, then asks:
+# Allow once / Allow for session / Reject (--yes skips; session never persists)
 
 # Agent system — orchestrated specialists (foreground, bounded, no daemon)
 local-ai agent run "add auth" --project MyApp --max-steps 20 --approve dangerous
@@ -169,6 +176,10 @@ local-ai memory set --scope project --project MyApp --content "uses React+Rust+P
 local-ai memory set --scope user --content "prefers TypeScript, short answers, Linux"
 local-ai memory forget --scope project --project MyApp --filter "old stack"
 # Auto-journalled after every `git commit` (files + stack, secrets redacted); injected into chat/analyze
+# Project conventions: check a LOCAL-AI.md into the repo — it outranks stored
+# memory in every prompt (chat/analyze/agent/debug), travels with the team,
+# and is secrets-redacted + capped at 4000 chars. Example:
+#   Use TypeScript. / Do not modify generated files. / Run npm test after changes.
 
 # Code graph — symbols + imports (read-only, plan-mode safe)
 local-ai graph --project MyApp --file src/auth.rs          # Imports / Imported-by / Functions / Tests / Recent changes

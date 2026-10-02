@@ -247,6 +247,14 @@ async fn chat_once(
         }
     };
 
+    // Project conventions (P1c): LOCAL-AI.md checked into the repo outranks
+    // stored memory — team-shared rules travel with the project.
+    if !no_context && !project_context.is_empty() {
+        if let Some(block) = crate::core::conventions::conventions_block(project) {
+            project_context = format!("{}\n\n{}", block, project_context);
+        }
+    }
+
     // Phase 3.1 memory: user → project tiers prepended (best-effort, capped).
     if !no_context && !project_context.is_empty() {
         let user_mem = crate::core::memory::load_memory(crate::core::memory::MemoryScope::User, None, None).unwrap_or_default();

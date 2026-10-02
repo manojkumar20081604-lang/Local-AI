@@ -28,8 +28,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub mcp: Vec<String>,
 
+    /// Free-form goal with no subcommand: `local-ai "fix the PDF crash"`
+    /// routes to the agent loop in the current directory.
+    pub prompt: Option<String>,
+
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]

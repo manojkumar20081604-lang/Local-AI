@@ -2,6 +2,7 @@ pub mod agents;
 pub mod bench;
 pub mod browse;
 pub mod config;
+pub mod conventions;
 pub mod dataset;
 pub mod debug;
 pub mod edits;

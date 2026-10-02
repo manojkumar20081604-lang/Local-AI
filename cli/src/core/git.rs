@@ -439,10 +439,72 @@ pub fn message_mentions_outside_changeset(msg: &str, changed: &[String]) -> Vec<
     out
 }
 
+// ---------------------------------------------------------------------------
+// Checkpoints (P1d) — stash-based rollback for agent/debug runs.
+// ---------------------------------------------------------------------------
+
+/// Stash message prefix for checkpoints (`local-ai/<label>-<ts>`).
+pub const CHECKPOINT_PREFIX: &str = "local-ai/";
+
+/// Stash the dirty tree (tracked + untracked) before a mutating run.
+/// Returns the checkpoint message when something was stashed, `None` when
+/// the tree is clean or the folder is not a git repo (both skip silently).
+/// Callers must still gate on build mode + approval — this only snapshots.
+pub fn checkpoint_stash(project: &Project, label: &str) -> Result<Option<String>> {
+    let root = project_root(project)?;
+    if ensure_repo(&root).is_err() {
+        return Ok(None);
+    }
+    if status(&root)?.is_clean() {
+        return Ok(None);
+    }
+    let msg = format!(
+        "{}{}-{}",
+        CHECKPOINT_PREFIX,
+        label,
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    );
+    run_git(&root, &["stash", "push", "-u", "-m", &msg])?;
+    Ok(Some(msg))
+}
+
+/// Best-effort wrapper for run starts: never fails the run, reports what
+/// happened so `--watch`/logs stay honest. Returns the checkpoint message
+/// when one was taken.
+pub fn checkpoint_before_run(project: &Project, label: &str) -> Option<String> {
+    match checkpoint_stash(project, label) {
+        Ok(msg) => msg,
+        Err(e) => {
+            eprintln!("checkpoint skipped: {}", e);
+            None
+        }
+    }
+}
+
+/// Restore the newest `local-ai/` checkpoint (`git stash pop`).
+/// Pop keeps the stash on conflict, so a failed rollback never loses work.
+/// Errors when no checkpoint exists. Caller gates: build mode (+ approval
+/// at the command layer).
+pub fn rollback_checkpoint(project: &Project) -> Result<String> {
+    let root = project_root(project)?;
+    ensure_repo(&root)?;
+    let list = stash_list(&root)?;
+    let entry = list
+        .iter()
+        .find(|l| l.contains(CHECKPOINT_PREFIX))
+        .cloned()
+        .unwrap_or_default();
+    if entry.is_empty() {
+        anyhow::bail!("No local-ai checkpoint found — nothing to roll back (see `git stash list`)");
+    }
+    let name = entry.split(':').next().unwrap_or("stash@{0}").to_string();
+    run_git(&root, &["stash", "pop", &name])?;
+    Ok(format!("Rolled back to checkpoint {} ({})", name, entry))
+}
+
 /// Create the commit. Caller gates: build mode, approval, test-green.
 /// Returns the new commit hash.
-pub fn commit(root: &Path, message: &str) -> Result<String> {
-    ensure_repo(root)?;
+pub fn commit(root: &Path, message: &str) -> Result<String> {    ensure_repo(root)?;
     if message.trim().is_empty() {
         anyhow::bail!("Empty commit message — pass -m \"type(scope): subject\"");
     }

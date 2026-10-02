@@ -167,6 +167,10 @@ pub async fn handle(
             intelligence::build_project_context_rag2(&args.query, &files, None, None, Some(&graph), Some(&recency), |p| core_fs::read_project_file(&proj, p).ok())
         }
     };
+    // Project conventions (P1c): LOCAL-AI.md outranks stored memory.
+    if let Some(block) = crate::core::conventions::conventions_block(&proj) {
+        context = format!("{}\n\n{}", block, context);
+    }
     // Phase 3.1 memory tiers (best-effort).
     {
         let user_mem = crate::core::memory::load_memory(crate::core::memory::MemoryScope::User, None, None).unwrap_or_default();

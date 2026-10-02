@@ -89,6 +89,12 @@ pub async fn handle(
     }
     crate::core::config::require_build_mode("debug")?;
 
+    // Checkpoint (P1d): stash the dirty tree before mutating. Best-effort —
+    // never blocks the run; `git rollback` restores the newest checkpoint.
+    if let Some(msg) = crate::core::git::checkpoint_before_run(&proj, "debug") {
+        println!("  {} checkpoint: {}", style("◈").dim(), style(msg).dim());
+    }
+
     // Model resolution — failure here is NON-fatal: diagnosis still works.
     let model: Option<String> = if let Some(m) = args.model.clone() {
         Some(m)
@@ -166,14 +172,18 @@ pub async fn handle(
             context_capped.truncate(24000);
             context_capped.push_str("\n…[truncated]");
         }
+        let conventions = crate::core::conventions::conventions_block(&proj)
+            .map(|b| format!("\n\n{}", b))
+            .unwrap_or_default();
         let user_msg = format!(
-            "Test command `{}` failed (attempt {}/{}).\n\nFAILURES:\n{}\n\nRELEVANT FILES: {}\n\nPROJECT CONTEXT:\n{}\n\nReturn ONLY the <EDIT>/<CREATE_FILE> blocks for the minimal fix.",
+            "Test command `{}` failed (attempt {}/{}).\n\nFAILURES:\n{}\n\nRELEVANT FILES: {}\n\nPROJECT CONTEXT:\n{}{}\n\nReturn ONLY the <EDIT>/<CREATE_FILE> blocks for the minimal fix.",
             test_cmd, attempt, max_attempts,
             failures.iter().map(|f| format!("- [{}] {}:{} — {}",
                 f.kind, f.file.as_deref().unwrap_or("?"), f.line.map(|l| l.to_string()).unwrap_or_else(|| "?".into()), f.message))
                 .collect::<Vec<_>>().join("\n"),
             top.join(", "),
-            context_capped
+            context_capped,
+            conventions
         );
         let messages = vec![
             provider::ChatMessage { role: "system".into(), content: FIX_SYSTEM.to_string() },
@@ -219,11 +229,8 @@ pub async fn handle(
             break;
         }
         if !args.yes {
-            let ok = dialoguer::Confirm::new()
-                .with_prompt(format!("Apply {} edit(s)?", preview.applied.len()))
-                .default(false)
-                .interact_opt()?;
-            if !ok.unwrap_or(false) {
+            super::runner::print_diff_preview(&proj, &ops);
+            if !super::runner::confirm_or_yes(&format!("Apply {} edit(s)?", preview.applied.len()), false)? {
                 println!("  {} rejected by user", style("✗").red());
                 transcript.push(serde_json::json!({"attempt": attempt, "exit": result.exit_code, "result": "rejected"}));
                 outcome = "rejected".to_string();

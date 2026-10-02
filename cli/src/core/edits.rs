@@ -136,6 +136,85 @@ pub struct ApplyReport {
     pub skipped: Vec<(String, String)>,
 }
 
+/// Max diff lines rendered per op (rest summarized, never silently dropped).
+const DIFF_CONTEXT_LINES: usize = 3;
+const DIFF_MAX_LINES_PER_OP: usize = 60;
+
+/// Render a unified-diff-style preview of `ops` against current file
+/// contents. Read-only: never writes. Refused ops render as
+/// `! path — reason` with the same verdicts `apply_ops` would give,
+/// so the preview never promises what apply would refuse.
+pub fn render_diff(project: &Project, ops: &[EditOp]) -> Vec<String> {
+    let files = core_fs::list_project_files(project).unwrap_or_default();
+    let inventory: HashSet<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    let mut out = Vec::new();
+    for op in ops {
+        out.push(format!("--- a/{} | +++ b/{}", op.path(), op.path()));
+        match op {
+            EditOp::Create { path, content } => {
+                if inventory.contains(path.as_str()) {
+                    out.push(format!("! {} — exists, refusing to overwrite (use EDIT)", path));
+                    continue;
+                }
+                push_capped(&mut out, content.lines().map(|l| format!("+{}", l)), "new file");
+            }
+            EditOp::Edit { path, search, replace } => {
+                if !inventory.contains(path.as_str()) {
+                    out.push(format!("! {} — not in project inventory, refusing invented path", path));
+                    continue;
+                }
+                let current = core_fs::read_project_file(project, path).unwrap_or_default();
+                let Some(anchor_at) = current.find(search.as_str()) else {
+                    out.push(format!("! {} — SEARCH anchor not found, would refuse", path));
+                    continue;
+                };
+                // Hunk window around the anchor (line-oriented, capped).
+                let anchor_end = anchor_at + search.len();
+                let lines: Vec<&str> = current.lines().collect();
+                let first = current[..anchor_at].matches('\n').count();
+                let last = current[..anchor_end.min(current.len())].matches('\n').count();
+                let from = first.saturating_sub(DIFF_CONTEXT_LINES);
+                let to = (last + DIFF_CONTEXT_LINES + 1).min(lines.len());
+                for (i, line) in lines.iter().enumerate().take(to).skip(from) {
+                    if (first..=last).contains(&i) {
+                        out.push(format!("-{}", line));
+                    } else {
+                        out.push(format!(" {}", line));
+                    }
+                    if out.len() >= DIFF_MAX_LINES_PER_OP {
+                        break;
+                    }
+                }
+                for line in replace.lines().take(DIFF_MAX_LINES_PER_OP.saturating_sub(out.len())) {
+                    out.push(format!("+{}", line));
+                }
+                if out.len() >= DIFF_MAX_LINES_PER_OP {
+                    out.push("… (diff truncated)".to_string());
+                }
+            }
+            EditOp::Delete { path } => {
+                if !inventory.contains(path.as_str()) {
+                    out.push(format!("! {} — not in project inventory, refusing invented path", path));
+                    continue;
+                }
+                let current = core_fs::read_project_file(project, path).unwrap_or_default();
+                push_capped(&mut out, current.lines().map(|l| format!("-{}", l)), "deleted file");
+            }
+        }
+    }
+    out
+}
+
+fn push_capped(out: &mut Vec<String>, lines: impl Iterator<Item = String>, what: &str) {
+    for (n, line) in lines.enumerate() {
+        if n >= DIFF_MAX_LINES_PER_OP {
+            out.push(format!("… ({} truncated)", what));
+            return;
+        }
+        out.push(line);
+    }
+}
+
 /// Apply ops against the project. Never bails on a single bad op — the
 /// failure is recorded in `skipped` and the rest still apply.
 pub fn apply_ops(project: &Project, ops: &[EditOp], dry_run: bool) -> Result<ApplyReport> {

@@ -23,16 +23,61 @@ use crate::core::{
 
 pub const CODER_SYSTEM: &str = "You are Local AI, a precise coding agent. Return ONLY machine-readable edit blocks for the MINIMAL change, nothing else.\n\nFILE EDITING RULES:\n<CREATE_FILE>FILE: path CONTENT: ... </CREATE_FILE>\n<EDIT>FILE: path SEARCH: ... REPLACE: ... </EDIT>\nRules: relative paths that already exist in the project (never invent files), SEARCH must match the file byte-for-byte, smallest change that achieves the goal, no refactoring, no new dependencies.";
 
+/// Approval prompt with tiers: allow-once, allow-for-session, reject.
+///
+/// `--yes` and a prior "allow for session" skip the prompt. Non-interactive
+/// terminals fail closed with a hint (re-run with `--yes`).
 pub fn confirm_or_yes(prompt: &str, yes: bool) -> Result<bool> {
     if yes {
         return Ok(true);
     }
-    match dialoguer::Confirm::new().with_prompt(prompt).default(false).interact_opt()? {
-        Some(v) => Ok(v),
-        None => {
-            eprintln!("{} non-interactive — re-run with --yes to approve", style("!").yellow());
+    // Session tier: approved once for the whole run (see P1b approval tiers).
+    if crate::core::config::session_approved() {
+        return Ok(true);
+    }
+    let choices = ["Allow once", "Allow for session", "Reject"];
+    match dialoguer::Select::new()
+        .with_prompt(prompt)
+        .items(&choices)
+        .default(2)
+        .interact_opt()?
+    {
+        Some(0) => Ok(true),
+        Some(1) => {
+            crate::core::config::approve_session();
+            println!("  {} session approved — further prompts auto-approve", style("→").dim());
+            Ok(true)
+        }
+        _ => {
+            // Reject, Esc, or non-interactive (None).
+            eprintln!("{} rejected — re-run with --yes to approve non-interactively", style("!").yellow());
             Ok(false)
         }
+    }
+}
+
+/// Print the unified-diff preview of `ops` before the approval prompt.
+/// Read-only: rendered from current file contents, changes nothing.
+pub fn print_diff_preview(proj: &crate::core::projects::Project, ops: &[core_edits::EditOp]) {
+    let diff = core_edits::render_diff(proj, ops);
+    if diff.is_empty() {
+        return;
+    }
+    println!("  {} diff preview:", style("±").dim());
+    for line in diff.iter().take(80) {
+        let styled = if let Some(rest) = line.strip_prefix('+') {
+            style(format!("    +{}", rest)).green().to_string()
+        } else if let Some(rest) = line.strip_prefix('-') {
+            style(format!("    -{}", rest)).red().to_string()
+        } else if line.starts_with('!') {
+            style(format!("    {}", line)).yellow().to_string()
+        } else {
+            format!("    {}", line)
+        };
+        println!("{}", styled);
+    }
+    if diff.len() > 80 {
+        println!("    {} ({} more lines)", style("…").dim(), diff.len() - 80);
     }
 }
 
@@ -122,6 +167,12 @@ pub async fn run_graph(
     let mut last_failures: Vec<core_debug::Failure> = Vec::new();
     let mut steps_this_run: u32 = 0;
     let mut stop = StopReason::Finished;
+
+    // Checkpoint (P1d): stash the dirty tree before mutating. Best-effort —
+    // never blocks the run; `git rollback` restores the newest checkpoint.
+    if let Some(msg) = crate::core::git::checkpoint_before_run(proj, mission_id) {
+        println!("  {} checkpoint: {}", style("◈").dim(), style(msg).dim());
+    }
 
     for step in &graph.steps {
         // Resume: skip steps finished by an earlier invocation (no budget consumed).
@@ -346,14 +397,18 @@ pub async fn run_graph(
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
+                let conventions = crate::core::conventions::conventions_block(proj)
+                    .map(|b| format!("\n\n{}", b))
+                    .unwrap_or_default();
                 let user_msg = format!(
-                    "Goal: {}\nStep: {} — {}\nTarget files: {}\n\nPrior test failures:\n{}\n\nProject files:\n{}\n\nReturn ONLY the <EDIT>/<CREATE_FILE> blocks for the minimal change.",
+                    "Goal: {}\nStep: {} — {}\nTarget files: {}\n\nPrior test failures:\n{}\n\nProject files:\n{}{}\n\nReturn ONLY the <EDIT>/<CREATE_FILE> blocks for the minimal change.",
                     ctx.goal,
                     step.id,
                     step.title,
                     target_files.join(", "),
                     failure_text,
-                    ctx_parts.join("\n\n---\n\n")
+                    ctx_parts.join("\n\n---\n\n"),
+                    conventions
                 );
                 println!("  {} asking {} for {}…", style("→").dim(), model_id, step.id);
                 if orch.check_budget().is_err() {
@@ -429,6 +484,7 @@ pub async fn run_graph(
                     }
                     continue;
                 }
+                print_diff_preview(proj, &ops);
                 // Reviewer pre-check on the payload (secrets/injection/traversal).
                 let sec = core_agents::security_review(&ops, &answer);
                 if !sec.passed {
