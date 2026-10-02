@@ -62,6 +62,8 @@ pub enum UiEvent {
     AnswerStart { query: String },
     /// A direct answer finished streaming (full text for history).
     ModelDone { full: String },
+    /// A direct answer task ended (success or failure) — releases the input.
+    AnswerDone { ok: bool },
     /// The effective model changed (resolve, /model, fallback) — header follows.
     ModelSwitch { model: String, provider: String },
     /// Run finished.

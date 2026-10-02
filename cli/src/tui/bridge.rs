@@ -140,6 +140,7 @@ pub async fn answer_once(
     let model: Option<String> =
         provider::resolve_model_id(model_override, provider_kind, provider_url, &cfg).await;
     let Some(model_id) = model else {
+        ui_events::emit(ui_events::UiEvent::AnswerDone { ok: false });
         anyhow::bail!("No model reachable — start Ollama or LM Studio first")
     };
     ui_events::emit(ui_events::UiEvent::ModelSwitch {
@@ -188,6 +189,7 @@ pub async fn answer_once(
                 provider::stream_chat_unified(provider_kind, provider_url, &cfg, &fb, messages, 0.4, &mut sink)
                     .await
                     .map_err(|e2| {
+                        ui_events::emit(ui_events::UiEvent::AnswerDone { ok: false });
                         anyhow::anyhow!(provider::friendly_error(
                             &e2.to_string(),
                             &provider_kind.to_string(),
@@ -195,12 +197,15 @@ pub async fn answer_once(
                         ))
                     })?;
             } else {
+                ui_events::emit(ui_events::UiEvent::AnswerDone { ok: false });
                 anyhow::bail!(provider::friendly_error(&err, &provider_kind.to_string(), &model_id));
             }
         } else {
+            ui_events::emit(ui_events::UiEvent::AnswerDone { ok: false });
             anyhow::bail!(provider::friendly_error(&err, &provider_kind.to_string(), &model_id));
         }
     }
     ui_events::emit(ui_events::UiEvent::ModelDone { full: full.clone() });
+    ui_events::emit(ui_events::UiEvent::AnswerDone { ok: true });
     Ok(full)
 }

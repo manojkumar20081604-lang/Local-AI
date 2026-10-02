@@ -86,6 +86,8 @@ fn test_every_event_maps_without_panic() {
         ev::UiEvent::Review { passed: false, summary: "s".into() },
         ev::UiEvent::AnswerStart { query: "q".into() },
         ev::UiEvent::ModelDone { full: "f".into() },
+        ev::UiEvent::AnswerDone { ok: true },
+        ev::UiEvent::AnswerDone { ok: false },
         ev::UiEvent::ModelSwitch { model: "m".into(), provider: "ollama".into() },
         ev::UiEvent::AgentComplete { green: true, summary: "s".into() },
     ];

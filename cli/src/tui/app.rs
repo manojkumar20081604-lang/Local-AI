@@ -492,6 +492,13 @@ fn apply_event(app: &mut App, ev: UiEvent) {
             }
             app.pending_answer.clear();
         }
+        UiEvent::AnswerDone { .. } => {
+            // Q&A tasks have no AgentComplete: release the input here or the
+            // second message is refused as "already active".
+            app.running = false;
+            app.run_handle = None;
+            app.anime = AnimeState::Idle;
+        }
         UiEvent::ModelSwitch { model, provider } => {
             app.model = Some(model.clone());
             if let Ok(kind) = provider.parse::<ProviderKind>() {
@@ -1445,5 +1452,74 @@ mod cursor_tests {
         // CJK is double-cell: chars().count() would say 5, display says 7.
         assert_eq!(input_cursor_col("日本"), 7);
         assert_eq!(input_cursor_col("a日本b"), 9);
+    }
+}
+
+#[cfg(test)]
+mod answer_done_tests {
+    use super::*;
+    use crate::core::ui_events::UiEvent;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn answer_done_releases_input_for_next_message() {
+        // Regression: Q&A has no AgentComplete, so without AnswerDone the
+        // second message is refused as "already active".
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let _ = &mut terminal;
+        let mut app = App {
+            proj: Project {
+                id: "test".into(),
+                name: "demo".into(),
+                created_at: String::new(),
+                updated_at: String::new(),
+                folder_path: None,
+                messages: Vec::new(),
+            },
+            files: Vec::new(),
+            branch: String::new(),
+            git_summary: String::new(),
+            provider_kind: ProviderKind::Auto,
+            provider_url: String::new(),
+            model: None,
+            model_override: None,
+            theme: Theme::default(),
+            theme_idx: 0,
+            caps: TermCaps { colors: true, unicode: true, animation: false },
+            anime: AnimeState::Thinking,
+            frame: 0,
+            line_idx: 0,
+            last_event: Instant::now(),
+            started: Instant::now(),
+            messages: Vec::new(),
+            pending_answer: String::new(),
+            chat_scroll: 0,
+            tasks: Vec::new(),
+            task_sel: 0,
+            total_steps: 0,
+            tools: Vec::new(),
+            tool_count: 0,
+            tests_pass: 0,
+            tests_fail: 0,
+            input: String::new(),
+            history: Vec::new(),
+            hist_idx: None,
+            focus: Focus::Chat,
+            palette_open: false,
+            palette_sel: 0,
+            approval: None,
+            running: true,
+            run_goal_text: "q".into(),
+            run_started: Instant::now(),
+            run_handle: None,
+            continue_offer: None,
+            should_quit: false,
+            width: 0,
+            height: 0,
+        };
+        apply_event(&mut app, UiEvent::AnswerDone { ok: true });
+        assert!(!app.running);
+        assert!(app.run_handle.is_none());
     }
 }
