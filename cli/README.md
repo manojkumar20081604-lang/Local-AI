@@ -111,6 +111,8 @@ local-ai exec --project MyApp -- "ls -la"
 
 # First run — provider → connection → model (saved globally, never in projects)
 local-ai init                                   # interactive wizard (also runs on first bare launch)
+local-ai                                        # bare: asks provider each launch until you pin one…
+local-ai provider select --name ollama          # …pin it, and bare launches go silent ✓✓✓
 local-ai init --provider ollama --model qwen3-coder  # non-interactive (scripts)
 local-ai provider list                          # endpoints + reachability (* = active)
 local-ai provider select --name ollama          # switch provider (re-checks saved model)
