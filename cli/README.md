@@ -4,16 +4,32 @@ Cross-platform CLI for local AI workspace + finetuning. Replaces the Tauri GUI w
 
 ## Install
 
-### From source (all OS - requires Rust >=1.77)
+### One command (recommended — `local-ai` works from any directory)
 
 ```bash
-git clone https://github.com/local-ai/local-ai
-cd local-ai/cli
-cargo build --release
-# binary at ./target/release/local-ai
-sudo cp target/release/local-ai /usr/local/bin/
-# or cargo install --path .
+git clone https://github.com/manojkumar20081604-lang/Local-AI
+cd Local-AI
+./install.sh              # → ~/.local/bin/local-ai (no sudo)
+./install.sh --system     # → /usr/local/bin/local-ai (needs sudo)
+./install.sh --uninstall  # remove it again
 ```
+
+If `~/.local/bin` is not on your PATH, add it once and restart the terminal:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+# fish: fish_add_path ~/.local/bin
+```
+
+### From source with cargo (same result)
+
+```bash
+cargo install --path cli            # installs `local-ai` to ~/.cargo/bin
+# or build manually:
+cd cli && cargo build --release     # binary at ./target/release/local-ai
+```
+
+Requires Rust >= 1.77 (https://rustup.rs).
 
 ### Prebuilt binaries (GitHub Releases)
 

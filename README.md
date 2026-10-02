@@ -24,8 +24,8 @@ Local AI helps developers understand, analyze, and modify projects using locally
 ## Quick Start (CLI)
 
 ```bash
-# Build
-cd cli && cargo build --release && ./target/release/local-ai --help
+# Install once — `local-ai` then works from any directory
+./install.sh   # → ~/.local/bin/local-ai (or: ./install.sh --system)
 
 # Attach a project and chat (auto-detects LM Studio or Ollama)
 local-ai project attach . --name MyApp
